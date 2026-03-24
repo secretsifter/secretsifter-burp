@@ -1,0 +1,10 @@
+.gradle/
+build/
+bin/
+*.jar
+*.class
+playwright-libs/
+.idea/
+*.iml
+.DS_Store
+.claude/

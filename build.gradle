@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '8.3.5'
+}
+
+group = 'com.secretscanner'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Montoya API — compileOnly: Burp provides this at runtime, NOT bundled in fat JAR
+    compileOnly 'net.portswigger.burp.extensions:montoya-api:2026.2'
+    // Also available at test runtime so SecretScannerTest can stub Logging without Burp
+    testImplementation 'net.portswigger.burp.extensions:montoya-api:2026.2'
+    // Gson for JSON body walker — Apache 2.0, no license blockers
+    implementation 'com.google.code.gson:gson:2.10.1'
+    // JUnit 5 — test only, not bundled
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Disable the plain jar — shadowJar is the only artifact
+jar {
+    enabled = false
+}
+
+shadowJar {
+    archiveBaseName.set('secretsifter')
+    archiveClassifier.set('')  // output: secretsifter-1.0.0.jar (fat JAR)
+    mergeServiceFiles()
+    manifest {
+        attributes 'Extension-Class': 'com.secretscanner.SecretScannerExtension'
+    }
+}
