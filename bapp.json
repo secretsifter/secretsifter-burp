@@ -1,0 +1,12 @@
+{
+  "packageName": "com.secretscanner",
+  "displayName": "Secret Sifter",
+  "version": "1.0.0",
+  "minBurpVersion": "2024.7",
+  "extensionClass": "com.secretscanner.SecretScannerExtension",
+  "description": "Passive and active secret-detection extension for Burp Suite. Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP traffic using 100+ anchored vendor token rules, 40+ context-gated rules, entropy-based heuristics, and a Bulk Scan tab with CSV and HTML report export.",
+  "homepage": "https://github.com/secretsifter/burp-secret-scanner",
+  "tags": ["passive-scan", "secrets", "credentials", "api-keys", "pii", "recon"],
+  "author": "Hemanth Gorijala",
+  "license": "MIT"
+}

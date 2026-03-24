@@ -1,0 +1,12 @@
+Secret Sifter — Burp Suite Extension
+Copyright 2024-2026 Hemanth Gorijala
+
+This product is licensed under the Elastic License 2.0
+(see LICENSE for the full text).
+
+---
+
+Vendor token format specifications are publicly documented by their
+respective service providers (GitHub, GitLab, AWS, Stripe, OpenAI,
+Slack, and others). The regex patterns implementing those formats
+are the author's independent work.
