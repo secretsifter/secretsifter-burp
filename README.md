@@ -147,8 +147,8 @@ Expands to all site-map entries for the selected host(s). Optionally save an HTM
 ### Build
 
 ```bash
-git clone https://github.com/secretsifter/burp-secret-scanner
-cd burp-secret-scanner
+git clone https://github.com/secretsifter/secretsifter-burp
+cd secretsifter-burp
 ./gradlew shadowJar
 ```
 
