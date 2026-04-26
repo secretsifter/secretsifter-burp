@@ -43,7 +43,7 @@ jar {
 // can clone the repo, run `./gradlew shadowJar`, and produce a byte-identical JAR for
 // SHA-256 verification against the submitted artifact.
 shadowJar {
-    archiveBaseName.set('secretsifter-bapp')
+    archiveBaseName.set('secretsifter')
     archiveClassifier.set('')
     mergeServiceFiles()
     preserveFileTimestamps = false

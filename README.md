@@ -82,13 +82,13 @@ the ones listed above, all of which are user-initiated.
 
 ### 1. Download the JAR
 
-Download `secretsifter-bapp-1.0.1.jar` from the Releases page, or build it yourself (see below).
+Download `secretsifter-1.0.1.jar` from the Releases page, or build it yourself (see below).
 
 ### 2. Load into Burp
 
 1. Open Burp Suite → **Extensions** tab → **Installed** → **Add**
 2. Set **Extension type**: Java
-3. Browse to `secretsifter-bapp-1.0.1.jar`
+3. Browse to `secretsifter-1.0.1.jar`
 4. Click **Next** — the extension loads and a **Secret Sifter** tab appears in the main tab bar
 
 ---
@@ -174,7 +174,7 @@ cd secretsifter-burp
 ./gradlew shadowJar
 ```
 
-Output: `build/libs/secretsifter-bapp-1.0.1.jar` (~554 KB)
+Output: `build/libs/secretsifter-1.0.1.jar` (~554 KB)
 
 ### Run tests
 
@@ -209,7 +209,7 @@ User-configurable key name blocklist and allowlist are available in the Settings
 ### Extension does not load
 - Verify Burp Suite version is 2024.7 or later
 - Check the **Extensions → Output** tab for error messages
-- Confirm you are loading the **shadow JAR** (`secretsifter-bapp-1.0.1.jar`), not the plain compile output
+- Confirm you are loading the **shadow JAR** (`secretsifter-1.0.1.jar`), not the plain compile output
 
 ### No findings appear for a known secret
 - Check **Settings → Scan Tier** — switch to FULL for maximum coverage
