@@ -3,6 +3,9 @@
 A passive and active secret-detection extension for Burp Suite (Montoya API).
 Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP traffic.
 
+> **Need AI Triage and Claude Code MCP integration?**
+> See [secretsifter-burp-mcp](https://github.com/secretsifter/secretsifter-burp-mcp) — same scanner core, plus multi-provider AI Triage (Burp AI / Anthropic / OpenAI) and a local MCP server for Claude Code. That edition is GitHub-direct only; it isn't on the BApp Store because it binds a local socket for MCP, which BApp Store policy disallows.
+
 > **Community Edition note:** Passive scan check registration requires Burp Suite Professional.
 > All other features (Bulk Scan, right-click rescan, sitemap sweep, proxy handler) work in
 > Community Edition. Findings will appear in the Bulk Scan panel and via the context menu
