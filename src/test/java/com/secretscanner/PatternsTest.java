@@ -117,7 +117,8 @@ class PatternsTest {
 
     @Nested @DisplayName("Google keys")
     class Google {
-        @Test void api_key_match()     { assertMatches(Patterns.GOOGLE_KEY,           "AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"); }
+        // Test fixtures are obviously synthetic so they can't be misread as real keys.
+        @Test void api_key_match()     { assertMatches(Patterns.GOOGLE_KEY,           "AIza" + "A".repeat(35)); }
         @Test void api_key_noMatch()   { assertNoMatch(Patterns.GOOGLE_KEY,           "AIzaSHORT"); }
         @Test void oauth_client_match(){ assertMatches(Patterns.GOOGLE_OAUTH_CLIENT_ID,"123456789012-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com"); }
     }
