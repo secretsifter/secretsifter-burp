@@ -57,9 +57,15 @@ public class SecretScanCheck implements PassiveScanCheck {
             for (SecretFinding f : findings)
                 grouped.computeIfAbsent(f.ruleName(), k -> new ArrayList<>()).add(f);
             List<AuditIssue> issues = new ArrayList<>();
-            for (List<SecretFinding> group : grouped.values())
-                if (SitemapDeduplicator.shouldAdd(group))
-                    issues.add(SecretFinding.toGroupedAuditIssue(group, requestResponse));
+            for (List<SecretFinding> group : grouped.values()) {
+                try {
+                    if (SitemapDeduplicator.shouldAdd(group))
+                        issues.add(SecretFinding.toGroupedAuditIssue(group, requestResponse));
+                } catch (Exception ex) {
+                    if (api != null)
+                        api.logging().logToError("SecretScanCheck: group add failed: " + ex);
+                }
+            }
             return AuditResult.auditResult(issues);
         } catch (Exception e) {
             if (api != null)

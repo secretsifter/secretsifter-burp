@@ -25,6 +25,10 @@ public final class SitemapDeduplicator {
     private static final ConcurrentHashMap<String, Boolean> seen =
             new ConcurrentHashMap<>();
 
+    /** Separate map for proxy-handler dedup — never shared with bulk-scan dedup. */
+    private static final ConcurrentHashMap<String, Boolean> proxySeen =
+            new ConcurrentHashMap<>();
+
     private SitemapDeduplicator() {}
 
     /**
@@ -59,6 +63,10 @@ public final class SitemapDeduplicator {
         if (url != null) {
             int h = url.indexOf('#');
             if (h >= 0) url = url.substring(0, h);
+            // Strip query string: same endpoint with different params (e.g. ?userId=1 vs ?userId=2)
+            // produces the same secret finding and should not create duplicate site-map entries.
+            int q = url.indexOf('?');
+            if (q >= 0) url = url.substring(0, q);
             for (String suf : new String[]{" [HTML]", " [JS]", " [JSON]", " [XML]", " [REQ-HEADERS]"})
                 if (url.endsWith(suf)) { url = url.substring(0, url.length() - suf.length()); break; }
         }
@@ -67,15 +75,47 @@ public final class SitemapDeduplicator {
         // keys from per-value keys so they can never collide in the same map.
         String groupKey = '\u0001' + normUrl + SEP + first.ruleName();
         if (seen.putIfAbsent(groupKey, Boolean.TRUE) != null) return false;
-        // Mark individual values as seen for cross-rule dedup (best-effort).
+        // Cross-rule value dedup: if every value in this group was already reported at
+        // this URL by an earlier rule (e.g. REQ_HEADER and AZURE_APIM_004 both fire for
+        // the same subscription key), suppress the duplicate group entirely.
+        boolean anyNew = false;
         for (SecretFinding f : group) {
-            tryAdd(normUrl, f.matchedValue());
+            if (tryAdd(normUrl, f.matchedValue())) anyNew = true;
         }
-        return true;
+        return anyNew;
+    }
+
+    /**
+     * Same logic as {@link #shouldAdd} but uses a namespace isolated from the
+     * bulk-scan dedup map.  Call this from the proxy handler so that bulk-scan
+     * processing of the same URL never blocks proxy-handler sitemap entries.
+     */
+    public static boolean shouldAddProxy(List<SecretFinding> group) {
+        if (group == null || group.isEmpty()) return false;
+        SecretFinding first = group.get(0);
+        String url = first.sourceUrl();
+        if (url != null) {
+            int h = url.indexOf('#');
+            if (h >= 0) url = url.substring(0, h);
+            int q = url.indexOf('?');
+            if (q >= 0) url = url.substring(0, q);
+            for (String suf : new String[]{" [HTML]", " [JS]", " [JSON]", " [XML]", " [REQ-HEADERS]"})
+                if (url.endsWith(suf)) { url = url.substring(0, url.length() - suf.length()); break; }
+        }
+        String normUrl = url == null ? "" : url;
+        String groupKey = '\u0001' + normUrl + SEP + first.ruleName();
+        if (proxySeen.putIfAbsent(groupKey, Boolean.TRUE) != null) return false;
+        boolean anyNew = false;
+        for (SecretFinding f : group) {
+            String key = normUrl + SEP + (f.matchedValue() == null ? "" : f.matchedValue());
+            if (proxySeen.putIfAbsent(key, Boolean.TRUE) == null) anyNew = true;
+        }
+        return anyNew;
     }
 
     /** Clears all tracked entries — call on extension unload. */
     public static void clear() {
         seen.clear();
+        proxySeen.clear();
     }
 }

@@ -222,9 +222,11 @@ class SecretScannerTest {
         @Test
         @DisplayName("RSA private key header in response body is reported HIGH")
         void rsaPrivateKey_reported() {
-            String body = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
+            // matchedValue is the full regex match (header + base64 lines), so assert on prefix.
+            // The body must use valid base64 chars only — '.' is not in [A-Za-z0-9+/=].
+            String body = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
             List<SecretFinding> findings = scanner.scanText(body, "text/plain", "https://example.com/key.pem");
-            assertFinding(findings, "-----BEGIN RSA PRIVATE KEY-----", "HIGH");
+            assertFindingStartsWith(findings, "-----BEGIN RSA PRIVATE KEY-----", "HIGH");
         }
     }
 
@@ -288,6 +290,20 @@ class SecretScannerTest {
                     .findFirst()
                     .ifPresent(f -> assertEquals(expectedSeverity, f.severity(),
                             "Wrong severity for value [" + expectedValue + "]"));
+        }
+    }
+
+    /** Asserts that at least one finding's matchedValue starts with {@code prefix}. */
+    private static void assertFindingStartsWith(List<SecretFinding> findings, String prefix, String expectedSeverity) {
+        assertTrue(findings.stream().anyMatch(f -> f.matchedValue() != null && f.matchedValue().startsWith(prefix)),
+                "Expected finding with value starting with [" + prefix + "] but got: " +
+                findings.stream().map(SecretFinding::matchedValue).toList());
+        if (expectedSeverity != null) {
+            findings.stream()
+                    .filter(f -> f.matchedValue() != null && f.matchedValue().startsWith(prefix))
+                    .findFirst()
+                    .ifPresent(f -> assertEquals(expectedSeverity, f.severity(),
+                            "Wrong severity for value starting with [" + prefix + "]"));
         }
     }
 }

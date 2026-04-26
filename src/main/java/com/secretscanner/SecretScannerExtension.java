@@ -36,14 +36,13 @@ public class SecretScannerExtension implements BurpExtension {
     public void initialize(MontoyaApi api) {
         api.extension().setName("SecretSifter");
 
-        // 1. Settings model (loaded from Burp preferences after SettingsPanel is wired)
+        // 1. Settings model
         ScanSettings settings = new ScanSettings();
 
-        // 2. Core scan engine (stateless — safe for concurrent passiveScan() calls)
+        // 2. Core scan engine
         SecretScanner scanner = new SecretScanner(settings, api.logging());
 
-        // 3a. Passive scan check — scope-aware; creates AuditIssues for Burp's Dashboard
-        //     Scanner API is Pro-only; Community Edition throws UnsupportedOperationException.
+        // 3a. Passive scan check (Pro only)
         try {
             api.scanner().registerPassiveScanCheck(
                     new SecretScanCheck(scanner, settings, api), ScanCheckType.PER_REQUEST);
@@ -51,48 +50,45 @@ public class SecretScannerExtension implements BurpExtension {
             api.logging().logToOutput("[*] Scanner API unavailable (Community Edition) — passive scan check skipped.");
         }
 
-        // 3b. Proxy handler — fires for ALL traffic (not scope-limited); routes cross-origin
-        //     findings (api.example.com called from app.example.com) to the Bulk Scan panel
-        //     via ScopeMonitor using the request Referer/Origin headers.
+        // 3b. Proxy handler
         SecretProxyHandler proxyHandler = new SecretProxyHandler(scanner, settings, api);
         api.proxy().registerResponseHandler(proxyHandler);
 
-        // 4. Context menu — right-click "Rescan for Secrets" in Proxy History / Repeater
+        // 4. Context menu
         SecretContextMenu contextMenu = new SecretContextMenu(scanner, settings, api);
         api.userInterface().registerContextMenuItemsProvider(contextMenu);
 
-        // 5. Settings panel + Bulk Scan panel — merged into a single suite tab
+        // 4b. Inline response tab
+        api.userInterface().registerHttpResponseEditorProvider(new SecretSifterTab(scanner));
+
+        // 5. UI panels
         SettingsPanel settingsPanel = new SettingsPanel(settings, api);
         BulkScanPanel bulkPanel    = new BulkScanPanel(scanner, settings, api);
 
-        // Single top-level tab with two sub-tabs to keep Burp's tab bar uncluttered
         JTabbedPane tabPane = new JTabbedPane();
         tabPane.addTab("Bulk Scan", bulkPanel.getPanel());
         tabPane.addTab("Settings",  settingsPanel.getPanel());
         api.userInterface().registerSuiteTab("Secret Sifter", tabPane);
 
-        // 6. Load persisted settings (must happen after panels are registered so UI syncs)
+        // 6. Load persisted settings
         settingsPanel.loadFromPreferences();
-        bulkPanel.syncFromSettings();   // restore saved scan tier into the BulkScan combo
-        bulkPanel.syncHttpClient();     // rebuild HTTP_CLIENT now that allowInsecureSsl pref is loaded
+        bulkPanel.syncFromSettings();
+        bulkPanel.syncHttpClient();
 
-        // 7. Sitemap sweep — scan responses already recorded in Burp's sitemap so that
-        //    findings appear immediately on load, just like JSMiner's passive scan check
-        //    retroactively covers existing traffic.  Runs on a daemon background thread;
-        //    only response bodies are scanned (request-header scanning uses the proxy
-        //    handler for live traffic to avoid seenRequestValues cross-contamination).
-        //    Burp's site-map model is Swing-backed on macOS — snapshot must be fetched
-        //    on the EDT, then processing continues on the background thread.
+        api.logging().logToOutput("[*] Loaded:\tSecretSifter v1.0.1 (Store)");
+        api.logging().logToOutput("[*] Author:\tHemanth Gorijala");
+        api.logging().logToOutput("[*] Config:\tTier=" + settings.getTier() +
+                "  Entropy≥" + settings.getEntropyThreshold() +
+                "  PII=" + settings.isPiiEnabled());
+
+        // 7. Sitemap sweep
         Thread sitemapSweep = new Thread(() -> {
             try { Thread.sleep(1500); } catch (InterruptedException ignored) { return; }
             if (!settings.isEnabled()) return;
-            // Use a single-element array as a mutable EDT→background carrier.
-            // The unchecked cast is unavoidable with Java generic arrays; suppressed here.
             @SuppressWarnings("unchecked")
             List<HttpRequestResponse>[] ref = new List[]{List.of()};
             try {
-                SwingUtilities.invokeAndWait(
-                        () -> ref[0] = api.siteMap().requestResponses());
+                SwingUtilities.invokeAndWait(() -> ref[0] = api.siteMap().requestResponses());
             } catch (Exception ignored) { return; }
             for (HttpRequestResponse rr : ref[0]) {
                 if (!settings.isEnabled()) break;
@@ -120,23 +116,16 @@ public class SecretScannerExtension implements BurpExtension {
         sitemapSweep.setDaemon(true);
         sitemapSweep.start();
 
-        // 8. Unloading handler — terminates background threads when extension is removed/reloaded.
-        //    Required by BApp Store acceptance criteria (criterion #6: Clean Unloading).
+        // 8. Clean unloading
         api.extension().registerUnloadingHandler(() -> {
-            bulkPanel.shutdown();          // stops scan, interrupts siteMapSweepThread, releases index
-            sitemapSweep.interrupt();      // stop the startup sitemap sweep if still running
+            bulkPanel.shutdown();
+            sitemapSweep.interrupt();
             proxyHandler.shutdown();
             contextMenu.shutdown();
-            scanner.clearRequestDedup();   // free proxy-handler dedup set
+            scanner.clearRequestDedup();
             SitemapDeduplicator.clear();
             ScopeMonitor.clearWatched();
             ScopeMonitor.setCrossOriginFollow(false);
         });
-
-        api.logging().logToOutput("[*] Loaded:\tSecretSifter v1.0.0");
-        api.logging().logToOutput("[*] Author:\tHemanth Gorijala");
-        api.logging().logToOutput("[*] Config:\tTier=" + settings.getTier() +
-                "  Entropy≥" + settings.getEntropyThreshold() +
-                "  PII=" + settings.isPiiEnabled());
     }
 }

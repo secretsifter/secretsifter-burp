@@ -2,6 +2,35 @@
 
 All notable changes to SecretSifter are documented here.
 
+## [1.0.1] — 2026-04-26
+
+### New features
+- **Custom rules only (raw) mode** — new toggle in Settings → Custom Rules. When enabled, the proxy and bulk-scan paths run *only* user-supplied custom rules and bypass the false-positive filters; every regex match is reported as-is. Built-in scanners are skipped. Allow/blocklist/CDN list still apply. Burp's audit (Issues panel) is unaffected.
+- **NOISE marking** — Severity and Confidence dropdowns now include a `NOISE` option. Rows marked NOISE are rendered in light gray with dimmed text and excluded from HTML / CSV / ZIP exports. The row stays visible in the table for manual unmarking.
+- **Target Status CSV bundled into report ZIPs** — the per-target reachability/auth status (which URLs were scanned, failed, or hit SSO) is now automatically included in the **All-in-one** and **Per-Domain** ZIP exports as a third file.
+- **Multi-file import for custom rules** — Ctrl/Cmd+click to select multiple `.txt` files; content is appended, not replaced.
+- **Enable custom rules toggle** — keep imported rules stored without running them during scans.
+- **Custom rules now run on all scan tiers** (FAST, LIGHT, FULL) — previously only on FULL.
+
+### Bug fixes
+- **Per-occurrence reporting in minified bundles** — same key/value at different file offsets (or different lines) now produces a separate finding row. Previously, dedup keys ignored byte offset and collapsed N matches at `lineNumber=1` into one row.
+- **Multi-target attribution** — when scanning multiple targets concurrently, a target's own assets always attribute to that target row, regardless of which scan thread fetched the URL first via cross-origin chunk discovery. Previously, race conditions on the shared `seenUrls` set could attribute one target's findings to another.
+- **AES_KEY / AES_IV detection** — added case-transition heuristic to `isProbableSecretValue()` so 32-char alphanumeric AES keys are no longer rejected as identifiers. `iv`, `nonce`, `salt` keys are now gated by a recognised crypto prefix (`aes`, `hmac`, `encrypt`, `cipher`, …).
+- **Webpack content hash suppression** — exactly 16- and 20-char lowercase hex values no longer surface as findings; these match webpack's default `[contenthash:20]` chunk-hash format.
+- **Homogeneity check** — repeated-character strings (e.g. `AAAAAAAAAAAAAAAA`) no longer match anchored token patterns. Any value where a single character accounts for >60% of the string is rejected as noise.
+- **Session identifier suppression** — `sessionId`, `session_id`, `jsessionid`, `phpsessid`, `asp.net_sessionid`, `sessid`, `sessionstate`, and variants added to the noise key filter.
+- **PEM private key — header-only constants suppressed** — bare `-----BEGIN RSA PRIVATE KEY-----` string literals (no key body) no longer produce findings.
+- **Opaque Bearer token suppression** — `Authorization: Bearer <token>` in request headers is suppressed unless the token starts with a known vendor prefix (`ghp_`, `sk-`, `SG.`, `shpat_`, etc.).
+- **Structural key suffix filter** — key names ending in `Type`, `Error`, `State`, or `Kind` are now excluded from the generic KV and entropy scanners.
+- **JS code-fragment value guard** — values containing `this.`, `),`, `)}`, or `){` are rejected as minified JavaScript code fragments.
+- **Settings tooltip rendering** — the *Custom rules only (raw)* tooltip is now plain text. Previously the multi-line HTML version rendered as literal markup in some Burp/Swing variants.
+- **Community rules — 8 noisy patterns fixed** — `SumoLogicAccessId`, `SumoLogicAccessKey`, `DroneCIToken`, `MessageBirdApiKey`, `NetlifyAccessToken`, `CodecovAccessToken`, `OktaApiToken` tightened with vendor-prefix or keyword context; duplicate `CohereApiKey` removed.
+
+### UI
+- Settings panel filter row reorganised into three columns (CDN Blocklist / Key Name Blocklist / Key Name Allowlist), freeing vertical space for the Custom Rules textarea.
+
+---
+
 ## [1.0.0] — 2026-03-19
 
 ### Initial release

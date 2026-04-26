@@ -15,6 +15,7 @@ import javax.swing.border.TitledBorder;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
@@ -47,13 +48,14 @@ public class BulkScanPanel {
 
     // ── Columns ───────────────────────────────────────────────────────────────
     private static final String[] COLS = {
-        "#", "Severity", "Confidence", "Rule ID", "Key", "Value", "URL", "Line", "Context", ""
+        "#", "Severity", "Confidence", "Rule ID", "Key", "Value", "URL", "Target URL", "Line", "Context", ""
     };
-    private static final int COL_SEV  = 1;
-    private static final int COL_CONF = 2;
-    private static final int COL_VAL  = 5;
-    private static final int COL_URL  = 6;
-    private static final int COL_DEL  = 9;
+    private static final int COL_SEV        = 1;
+    private static final int COL_CONF       = 2;
+    private static final int COL_VAL        = 5;
+    private static final int COL_URL        = 6;
+    private static final int COL_TARGET_URL = 7;
+    private static final int COL_DEL        = 10;
 
     // ── State ─────────────────────────────────────────────────────────────────
     private final SecretScanner  scanner;
@@ -62,7 +64,21 @@ public class BulkScanPanel {
 
     private final DefaultTableModel            tableModel;
     private final List<SecretFinding>          tableFindings  = Collections.synchronizedList(new ArrayList<>());
+    /** Suppressed-findings debug log — populated during scanTextDebug() calls; cleared on scan start. */
+    private final List<SecretScanner.DebugEntry> debugEntries = Collections.synchronizedList(new ArrayList<>());
+    /**
+     * Monotonically increasing clear counter — incremented every time clearResults() runs.
+     * Stale invokeLater callbacks (enqueued before a clear but executing after) check
+     * this counter and discard the finding if it has advanced. Fixes Windows-specific
+     * re-population where the EDT queue fills with pending appendFinding calls before
+     * the user clicks Clear Results.
+     */
+    private final AtomicInteger                scanGeneration = new AtomicInteger(0);
     private final AtomicBoolean                running        = new AtomicBoolean(false);
+    /** True while the scan is paused by the user (running stays true during pause). */
+    private final AtomicBoolean                paused         = new AtomicBoolean(false);
+    /** Monitor used by checkPause() — workers wait on this; resumeScan/stopScan notifyAll. */
+    private final Object                       pauseLock      = new Object();
     private final AtomicInteger                urlsDone       = new AtomicInteger(0);
     private final AtomicInteger                urlsStarted    = new AtomicInteger(0);
     /** Total number of HTTP requests to make this scan (grows as JS/chunks are discovered). */
@@ -76,10 +92,14 @@ public class BulkScanPanel {
      *  Using URL strings instead of body.hashCode() avoids 32-bit int collisions
      *  that silently drop findings when ~540+ bodies are processed concurrently. */
     private final Set<String>                  seenUrls       = ConcurrentHashMap.newKeySet();
-    /** Finding-level dedup — prevents the same (ruleId, url, value) triple from appearing
-     *  more than once in the table across multiple scans of the same site. Cleared only
-     *  when the user clicks "Clear Results". Keyed by ruleId + ":" + sourceUrl + ":" + matchedValue. */
+    /** Finding-level dedup — prevents the same (host, normalised-value) pair from appearing
+     *  more than once in the table. Cleared on each scan start. */
     private final Set<String>                  seenFindings   = ConcurrentHashMap.newKeySet();
+    /** Position-level dedup — same rule at the same line of the same URL path is one finding
+     *  even when the value differs across requests (e.g. freshly-generated JWT / CSRF tokens
+     *  on login pages scanned via URL variants with different query params). Cleared on scan start.
+     *  Key: cleanUrl + "\0" + ruleId + "\0" + lineNumber + "\0" + keyName */
+    private final Set<String>                  seenPositions  = ConcurrentHashMap.newKeySet();
     /** Limits concurrent headless Chrome processes so they don't all launch at once
      *  when scanning with many threads. Max 3 Chrome instances run simultaneously. */
     private final Semaphore                    headlessSemaphore = new Semaphore(3);
@@ -91,14 +111,32 @@ public class BulkScanPanel {
     /** Mask-toggle state for the Value and URL columns. */
     private volatile boolean maskValues = false;
     private volatile boolean maskUrls   = false;
+    /** All column objects in original order — used to restore hidden columns at the correct position. */
+    private final List<TableColumn> allTableColumns = new ArrayList<>();
+    /** Names of currently hidden columns — persisted via Burp preferences key "secretsifter.hidden_cols". */
+    private final Set<String> hiddenColumnNames = new LinkedHashSet<>();
     /** True once the user has accepted the headless-browse consent dialog this session. */
     private volatile boolean headlessConsentGiven = false;
+    /** When non-empty, appendFinding() drops findings whose host is not in this set.
+     *  Populated at scan-start when "Strict Scope" is ON; cleared otherwise. */
+    private volatile Set<String> strictScopeHosts = Collections.emptySet();
+    /** Tracks the original input target URL while processUrl() is executing on a worker thread.
+     *  Used by scanAndAppend() to annotate every finding with its origin target for reports. */
+    private final ThreadLocal<String> currentTargetUrl = new ThreadLocal<>();
+    /** Maps normalised hostname → first input target URL with that host.
+     *  Built at scan start; used by appendFinding() to attribute site-map-sweep and
+     *  proxy findings to an origin target when the ThreadLocal is not set. */
+    private volatile Map<String, String> hostToTargetUrl = Collections.emptyMap();
 
     // ── Target status tracking (Option 1 + 4) ────────────────────────────────
     private final AtomicInteger statusScanned = new AtomicInteger(0);
     private final AtomicInteger statusFailed  = new AtomicInteger(0);
     private final AtomicInteger statusAuth    = new AtomicInteger(0);
     private DefaultTableModel   targetStatusModel;
+    /** Full-detail target status log — mirrors targetStatusModel but stores the full
+     *  target URL (not the truncated hostname) for CSV export.
+     *  Rows: [0]=status icon, [1]=full target URL, [2]=detail string. */
+    private final List<String[]> targetStatusExport = Collections.synchronizedList(new ArrayList<>());
     private JLabel              sumScannedLbl;
     private JLabel              sumFailedLbl;
     private JLabel              sumAuthLbl;
@@ -111,12 +149,13 @@ public class BulkScanPanel {
     private JPanel    rootPanel;
     private JTextArea urlArea;
     private JSpinner  concurrencySpinner;
-    private JCheckBox followScriptSrcBox;
-    private JCheckBox followChunksBox;
-    private JCheckBox scopeMonitorBox;
-    private JCheckBox crossOriginBox;
-    private JCheckBox headlessBrowseBox;
-    private JCheckBox debugModeBox;
+    private ToggleSwitch followScriptSrcBox;
+    private ToggleSwitch followChunksBox;
+    private ToggleSwitch scopeMonitorBox;
+    private ToggleSwitch crossOriginBox;
+    private ToggleSwitch headlessBrowseBox;
+    private ToggleSwitch debugModeBox;
+    private ToggleSwitch strictScopeBox;
     private JSpinner  proxyPortSpinner;
     private JComboBox<String> tierCombo;
     private JButton   startBtn;
@@ -191,7 +230,7 @@ public class BulkScanPanel {
 
         // Top half: URL textarea + buttons (unchanged UX)
         JPanel urlTopPanel = new JPanel(new BorderLayout(4, 4));
-        urlTopPanel.setBorder(new TitledBorder("Target URLs  (one per line)"));
+        urlTopPanel.setBorder(new TitledBorder("Target URLs  (one per line — 30 max recommended)"));
 
         urlArea = new JTextArea();
         urlArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -225,7 +264,7 @@ public class BulkScanPanel {
         targetStatusTable.getColumnModel().getColumn(0).setResizable(false);
         targetStatusTable.getColumnModel().getColumn(1).setPreferredWidth(192);
         targetStatusTable.getColumnModel().getColumn(2).setPreferredWidth(70);
-        // Colored icon renderer: "+" = green OK, "×" = red fail, "~" = orange auth
+        // Colored icon renderer: "+" = green OK, "×" = red fail, "~" = orange auth, "?" = grey soft-404
         targetStatusTable.getColumnModel().getColumn(0).setCellRenderer(
             new DefaultTableCellRenderer() {
                 @Override public java.awt.Component getTableCellRendererComponent(
@@ -238,6 +277,7 @@ public class BulkScanPanel {
                             case "+" -> setForeground(new Color(0, 150, 0));
                             case "×" -> setForeground(new Color(200, 0, 0));
                             case "~" -> setForeground(new Color(160, 80, 0));
+                            case "?" -> setForeground(new Color(120, 120, 120));
                             default  -> setForeground(Color.GRAY);
                         }
                     }
@@ -264,39 +304,35 @@ public class BulkScanPanel {
         concurrencySpinner.setPreferredSize(new Dimension(50, 24));
         optPanel.add(concurrencySpinner);
 
-        followScriptSrcBox = new JCheckBox("Follow <script src>",  true);
+        followScriptSrcBox = new ToggleSwitch("Follow <script src>",  true);
         followScriptSrcBox.setToolTipText("Fetch and scan all external JS files referenced in HTML");
 
-        followChunksBox = new JCheckBox("Follow webpack chunks", true);
+        followChunksBox = new ToggleSwitch("Follow webpack chunks", true);
         followChunksBox.setToolTipText("Follow webpack/Next.js chunk references inside JS bundles (depth 1)");
 
-        // Scope monitor defaults to ON so passive proxy traffic is captured automatically
-        scopeMonitorBox = new JCheckBox("Scope Monitor", true);
+        // Scope monitor defaults to OFF — activates only when the user explicitly enables it
+        // or starts a scan. Defaulting to ON caused all proxy traffic to route to the Bulk
+        // Scan panel even when no scan was running.
+        scopeMonitorBox = new ToggleSwitch("Scope Monitor", false);
         scopeMonitorBox.setToolTipText(
                 "Also capture passive-scan findings from Burp proxy traffic\n" +
                 "for any host that appears in the URL list above");
         scopeMonitorBox.addActionListener(e -> toggleScopeMonitor());
-        // Initialize listener immediately — the checkbox defaults to ON so the user never
-        // clicks it, meaning toggleScopeMonitor() is never called and listener stays null.
-        // Without this, SecretProxyHandler findings are silently dropped on startup.
-        ScopeMonitor.setListener((f, url) -> SwingUtilities.invokeLater(() -> appendFinding(f)));
-        ScopeMonitor.setActive(true);   // activate immediately on startup
 
-        crossOriginBox = new JCheckBox("Cross-origin APIs", true);
+        crossOriginBox = new ToggleSwitch("Cross-origin APIs", true);
         crossOriginBox.setToolTipText(
                 "Capture API calls fired by a watched host's JavaScript to other domains. " +
                 "Example: api.example.com called from app.example.com is captured. " +
                 "Note: third-party services (analytics, CDN) loaded from the same page " +
                 "may also appear — add them to the CDN blocklist to suppress.");
         crossOriginBox.addActionListener(e -> ScopeMonitor.setCrossOriginFollow(crossOriginBox.isSelected()));
-        ScopeMonitor.setCrossOriginFollow(true);  // initialise immediately — action listener only fires on click
 
-        headlessBrowseBox = new JCheckBox("Headless Browse", false);
+        headlessBrowseBox = new ToggleSwitch("Headless Browse", false);
         headlessBrowseBox.setToolTipText(
                 "Launch Chrome via Burp proxy to capture dynamic XHR/fetch calls static fetch misses. " +
                 "Requires Chrome/Chromium. Intercept must be OFF during scan.");
-        headlessBrowseBox.addItemListener(e -> {
-            if (e.getStateChange() == java.awt.event.ItemEvent.SELECTED) {
+        headlessBrowseBox.addActionListener(e -> {
+            if (headlessBrowseBox.isSelected()) {
                 // Already accepted this session — no dialog needed
                 if (headlessConsentGiven) return;
 
@@ -335,6 +371,18 @@ public class BulkScanPanel {
         // Headless Browse is always OFF on load — user must opt in each session.
         // Prior consent is stored only to skip the consent dialog (not to auto-enable the feature).
 
+        strictScopeBox = new ToggleSwitch("Strict Scope", false);
+        strictScopeBox.setToolTipText(
+                "Limit findings to hosts in the URL list only. " +
+                "Cross-origin API capture is disabled automatically. " +
+                "Duplicate entries in the URL list are always removed before scanning.");
+        strictScopeBox.addActionListener(e -> {
+            if (strictScopeBox.isSelected()) {
+                crossOriginBox.setSelected(false);
+                ScopeMonitor.setCrossOriginFollow(false);
+            }
+        });
+
         optPanel.add(new JLabel("Proxy:"));
         proxyPortSpinner = new JSpinner(new SpinnerNumberModel(8080, 1, 65535, 1));
         proxyPortSpinner.setPreferredSize(new Dimension(65, 24));
@@ -344,7 +392,7 @@ public class BulkScanPanel {
         proxyPortSpinner.setEditor(portEditor);
         optPanel.add(proxyPortSpinner);
 
-        debugModeBox = new JCheckBox("Debug", false);
+        debugModeBox = new ToggleSwitch("Debug", false);
         debugModeBox.setToolTipText(
                 "Log every CDP-observed URL and proxy-replay detail to Extensions → Output. " +
                 "Disable for normal use to reduce log noise.");
@@ -356,7 +404,11 @@ public class BulkScanPanel {
         stopBtn    = new JButton("■  Stop");
         siteMapBtn = new JButton("🗺  Scan Site Map");
         stopBtn.setEnabled(false);
-        startBtn.addActionListener(e   -> startScan());
+        startBtn.addActionListener(e -> {
+            if (running.get() && !paused.get()) pauseScan();
+            else if (paused.get())              resumeScan();
+            else                                startScan();
+        });
         stopBtn.addActionListener(e    -> stopScan());
         siteMapBtn.addActionListener(e -> scanFromSiteMap());
         siteMapBtn.setToolTipText(
@@ -378,6 +430,8 @@ public class BulkScanPanel {
 
         // ── Centre: results table ──────────────────────────────────────────
         resultsTable = new JTable(tableModel);
+        for (int i = 0; i < resultsTable.getColumnModel().getColumnCount(); i++)
+            allTableColumns.add(resultsTable.getColumnModel().getColumn(i));
         resultsTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
         resultsTable.setRowHeight(20);
         resultsTable.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -404,23 +458,30 @@ public class BulkScanPanel {
                 new RowSorter.SortKey(0, SortOrder.ASCENDING)));
 
         // Column widths
-        int[] widths = { 35, 65, 75, 130, 130, 220, 220, 45, 200, 28 };
+        int[] widths = { 35, 65, 75, 130, 130, 220, 220, 160, 45, 200, 28 };
         for (int i = 0; i < widths.length && i < resultsTable.getColumnCount(); i++) {
             resultsTable.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
         }
 
-        // Severity dropdown editor
-        JComboBox<String> sevCombo = new JComboBox<>(new String[]{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATION"});
+        // Severity dropdown editor — includes NOISE so users can manually flag findings as
+        // noise. Rows marked NOISE in either severity or confidence are rendered in gray and
+        // excluded from HTML/CSV exports.
+        JComboBox<String> sevCombo = new JComboBox<>(new String[]{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATION", "NOISE"});
         resultsTable.getColumnModel().getColumn(COL_SEV).setCellEditor(new DefaultCellEditor(sevCombo));
 
-        // Keep severity count badges in sync when user edits a severity cell via the dropdown
+        // Keep severity count badges + table repaint in sync when severity or confidence
+        // changes via the dropdown (so rows marked NOISE redraw in gray immediately).
         tableModel.addTableModelListener(e -> {
-            if (e.getColumn() == COL_SEV)
-                SwingUtilities.invokeLater(this::updateCountBadges);
+            if (e.getColumn() == COL_SEV || e.getColumn() == COL_CONF) {
+                SwingUtilities.invokeLater(() -> {
+                    updateCountBadges();
+                    resultsTable.repaint();
+                });
+            }
         });
 
-        // Confidence dropdown editor
-        JComboBox<String> confCombo = new JComboBox<>(new String[]{"FIRM", "CERTAIN", "TENTATIVE"});
+        // Confidence dropdown editor — also includes NOISE.
+        JComboBox<String> confCombo = new JComboBox<>(new String[]{"FIRM", "CERTAIN", "TENTATIVE", "NOISE"});
         resultsTable.getColumnModel().getColumn(COL_CONF).setCellEditor(new DefaultCellEditor(confCombo));
 
         // Delete (×) column — render as a red button; handle click via mouse listener
@@ -467,17 +528,21 @@ public class BulkScanPanel {
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
 
-        // Stretch the Context column (index 8) to fill remaining viewport width
+        // Stretch the last content column (just before the × delete button) to fill viewport.
+        // Uses colCount-2 so the index stays correct when columns are hidden/shown.
         tableScroll.addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override public void componentResized(java.awt.event.ComponentEvent e) {
+                int colCount = resultsTable.getColumnCount();
+                if (colCount < 2) return;
+                int stretchIdx = colCount - 2; // always the column immediately before ×
                 int viewportW = tableScroll.getViewport().getWidth();
                 int fixed = 0;
-                for (int i = 0; i < resultsTable.getColumnCount(); i++) {
-                    if (i != 8) fixed += resultsTable.getColumnModel().getColumn(i).getWidth();
+                for (int i = 0; i < colCount; i++) {
+                    if (i != stretchIdx) fixed += resultsTable.getColumnModel().getColumn(i).getWidth();
                 }
                 int ctx = Math.max(120, viewportW - fixed);
-                resultsTable.getColumnModel().getColumn(8).setPreferredWidth(ctx);
-                resultsTable.getColumnModel().getColumn(8).setWidth(ctx);
+                resultsTable.getColumnModel().getColumn(stretchIdx).setPreferredWidth(ctx);
+                resultsTable.getColumnModel().getColumn(stretchIdx).setWidth(ctx);
             }
         });
 
@@ -519,7 +584,13 @@ public class BulkScanPanel {
         countPanel.add(medCountBtn);
         countPanel.add(lowCountBtn);
 
+        JButton columnsBtn = new JButton("Columns \u25be");
+        columnsBtn.setFont(columnsBtn.getFont().deriveFont(Font.PLAIN, 11f));
+        columnsBtn.setToolTipText("Show or hide table columns");
+        columnsBtn.addActionListener(e -> showColumnPicker(columnsBtn));
+
         JPanel eyeBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        eyeBtns.add(columnsBtn);
         eyeBtns.add(eyeValueBtn);
         eyeBtns.add(eyeUrlBtn);
 
@@ -569,26 +640,32 @@ public class BulkScanPanel {
         JButton exportDataBtn = new JButton("Export  \u25BE");
         exportDataBtn.setToolTipText("Export findings as CSV or JSON");
         JPopupMenu dataExportMenu = new JPopupMenu();
-        JMenuItem exportCsvItem  = new JMenuItem("Export CSV");
         JMenuItem exportJsonItem = new JMenuItem("Export JSON");
-        exportCsvItem.setToolTipText("Save all findings as a CSV spreadsheet");
         exportJsonItem.setToolTipText("Save all findings as a JSON file");
-        exportCsvItem.addActionListener(e  -> exportCsv());
-        exportJsonItem.addActionListener(e -> exportJson());
-        dataExportMenu.add(exportCsvItem);
+        JMenuItem exportDebugCsvItem    = new JMenuItem("Export Debug CSV (Suppressed)");
+        JMenuItem exportTargetStatusItem = new JMenuItem("Export Target Status CSV");
+        exportDebugCsvItem.setToolTipText("Save all suppressed/dropped findings with suppression reasons");
+        exportTargetStatusItem.setToolTipText(
+                "Save scan target status (scanned / failed / SSO) as a CSV — one row per target URL");
+        exportJsonItem.addActionListener(e        -> exportJson());
+        exportDebugCsvItem.addActionListener(e    -> exportDebugCsv());
+        exportTargetStatusItem.addActionListener(e -> exportTargetStatusCsv());
         dataExportMenu.add(exportJsonItem);
+        dataExportMenu.addSeparator();
+        dataExportMenu.add(exportDebugCsvItem);
+        dataExportMenu.add(exportTargetStatusItem);
         exportDataBtn.addActionListener(e ->
                 dataExportMenu.show(exportDataBtn, 0, exportDataBtn.getHeight()));
 
-        // HTML export — dropdown: "All-in-one Report" | "Per-Domain Reports (ZIP)"
-        JButton exportHtmlBtn = new JButton("Export HTML  \u25BE");
-        exportHtmlBtn.setToolTipText("Export findings as HTML report");
+        // ZIP export — dropdown: "All-in-one Report" | "Per-Domain Reports (ZIP)"
+        JButton exportHtmlBtn = new JButton("Export ZIP  \u25BE");
+        exportHtmlBtn.setToolTipText("Export findings as a ZIP archive containing an HTML report and a CSV file");
         JPopupMenu htmlExportMenu = new JPopupMenu();
         JMenuItem allInOneItem  = new JMenuItem("All-in-one Report");
         JMenuItem perDomainItem = new JMenuItem("Per-Domain Reports (ZIP)");
-        allInOneItem.setToolTipText("Single HTML file containing all findings");
-        perDomainItem.setToolTipText("One HTML report per base domain, packaged as a ZIP file");
-        allInOneItem.addActionListener(e  -> exportHtml());
+        allInOneItem.setToolTipText("ZIP containing one HTML report + one CSV (all findings)");
+        perDomainItem.setToolTipText("ZIP containing one HTML per domain + one combined CSV (all findings)");
+        allInOneItem.addActionListener(e  -> exportAllInOneZip());
         perDomainItem.addActionListener(e -> exportHtmlPerDomain());
         htmlExportMenu.add(allInOneItem);
         htmlExportMenu.add(perDomainItem);
@@ -640,10 +717,9 @@ public class BulkScanPanel {
         summaryBar.add(new JLabel("  |"));
         summaryBar.add(sumAuthLbl);
         summaryBar.add(new JLabel("  |"));
-        for (JCheckBox cb : new JCheckBox[]{
-                followScriptSrcBox, followChunksBox, scopeMonitorBox, crossOriginBox, headlessBrowseBox}) {
+        for (ToggleSwitch cb : new ToggleSwitch[]{
+                followScriptSrcBox, followChunksBox, crossOriginBox, headlessBrowseBox, strictScopeBox, scopeMonitorBox}) {
             cb.setFont(sf);
-            cb.setOpaque(false);
             summaryBar.add(cb);
         }
 
@@ -659,19 +735,29 @@ public class BulkScanPanel {
         northWrapper.add(optPanel);
         northWrapper.add(summaryBar);
 
+        // Horizontal scroll so options remain accessible when the window is narrow.
+        JScrollPane northScroll = new JScrollPane(northWrapper,
+                ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER,
+                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        northScroll.setBorder(null);
+
         // ── Assemble layout ────────────────────────────────────────────────
         // Vertical split: drag divider to resize Scan Options vs Findings table.
         // resizeWeight=0 → findings panel absorbs all extra height on window resize.
-        JSplitPane vertSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, northWrapper, centrePanel);
+        JSplitPane vertSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, northScroll, centrePanel);
         vertSplit.setResizeWeight(0.0);
         vertSplit.setBorder(null);
         // Set the divider to northWrapper's real height AFTER the panel is shown,
         // so the pixel value is respected regardless of DPI or L&F.
+        // Add scrollbar height buffer so options bar stays fully visible when a
+        // horizontal scrollbar appears on narrow windows.
         vertSplit.addHierarchyListener(e -> {
             if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0
                     && vertSplit.isShowing()) {
-                SwingUtilities.invokeLater(() ->
-                        vertSplit.setDividerLocation(northWrapper.getPreferredSize().height + 2));
+                SwingUtilities.invokeLater(() -> {
+                    int scrollBarH = northScroll.getHorizontalScrollBar().getPreferredSize().height;
+                    vertSplit.setDividerLocation(northWrapper.getPreferredSize().height + scrollBarH + 2);
+                });
             }
         });
 
@@ -703,7 +789,14 @@ public class BulkScanPanel {
         if (on) {
             ScopeMonitor.clearWatched();
             parseUrls().forEach(ScopeMonitor::addWatchedUrl);
-            ScopeMonitor.setListener((f, url) -> SwingUtilities.invokeLater(() -> appendFinding(f)));
+            ScopeMonitor.setListener((f, url) -> {
+                final int gen = scanGeneration.get();
+                SwingUtilities.invokeLater(() -> {
+                    if (scanGeneration.get() != gen) return;
+                    appendFinding(url != null && !url.isEmpty() && (f.targetUrl() == null || f.targetUrl().isEmpty())
+                            ? f.withTargetUrl(url) : f);
+                });
+            });
             ScopeMonitor.setActive(true);
             statusLabel.setText("Scope monitor active (" + parseUrls().size() + " hosts watched).");
         } else {
@@ -717,7 +810,7 @@ public class BulkScanPanel {
     // Scan orchestration
     // =========================================================================
 
-    private void startScan() {
+    void startScan() {
         List<String> urls = parseUrls();
         if (urls.isEmpty()) {
             JOptionPane.showMessageDialog(rootPanel,
@@ -726,26 +819,93 @@ public class BulkScanPanel {
             return;
         }
 
-        // Warn if Burp's proxy intercept is ON — all scan requests will be held,
-        // causing the scan to complete immediately with zero findings.
+        // Always deduplicate input URLs — normalise first (adds https://, lower-cases host)
+        // then collapse exact matches. Keeps first occurrence; preserves insertion order.
+        {
+            LinkedHashMap<String, String> deduped = new LinkedHashMap<>();
+            for (String u : urls) {
+                String key = normaliseUrl(u);
+                if (key != null) deduped.putIfAbsent(key.toLowerCase(), u);
+            }
+            int removed = urls.size() - deduped.size();
+            urls = new ArrayList<>(deduped.values());
+            if (removed > 0)
+                api.logging().logToOutput("[BulkScan] Input dedup: removed "
+                        + removed + " duplicate(s), scanning " + urls.size() + " unique URL(s).");
+        }
+
+        // Build host → origin target map for finding attribution in reports.
+        // First input URL per host wins; used by appendFinding() as a fallback
+        // when the ThreadLocal is not set (site map sweep, HAR, proxy paths).
+        {
+            Map<String, String> htMap = new LinkedHashMap<>();
+            for (String u : urls) {
+                String norm = normaliseUrl(u);
+                if (norm != null) {
+                    try { htMap.putIfAbsent(new java.net.URL(norm).getHost().toLowerCase(), u); }
+                    catch (Exception ignored) {}
+                }
+            }
+            hostToTargetUrl = Collections.unmodifiableMap(htMap);
+        }
+
+        // Populate strict-scope host set from the (now-deduplicated) URL list.
+        // appendFinding() uses this to drop findings from out-of-scope hosts.
+        if (strictScopeBox.isSelected()) {
+            Set<String> hosts = new HashSet<>();
+            for (String u : urls) {
+                String norm = normaliseUrl(u);
+                if (norm != null) {
+                    try { hosts.add(new java.net.URL(norm).getHost().toLowerCase()); }
+                    catch (Exception ignored) {}
+                }
+            }
+            strictScopeHosts = Collections.unmodifiableSet(hosts);
+            // Cross-origin capture is meaningless in strict-scope mode — disable it.
+            crossOriginBox.setSelected(false);
+            ScopeMonitor.setCrossOriginFollow(false);
+        } else {
+            strictScopeHosts = Collections.emptySet();
+        }
+
         // Apply the bulk-scan tier selection to the shared settings object so that
         // all scan code paths (SecretScanner, processUrl, etc.) use the correct tier.
         settings.setTier(ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem()));
 
+        // Rebuild HTTP clients at scan start using the current proxy port from the spinner.
+        // The clients built at construction time use the hardcoded default port (8080); if
+        // the user has changed the proxy port since startup the old client routes to the wrong
+        // port and IP-address HTTPS fetches fail silently.
+        {
+            int port = (proxyPortSpinner != null) ? (int) proxyPortSpinner.getValue() : 8080;
+            HTTP_CLIENT    = buildHttpClient(settings.isAllowInsecureSsl(), port);
+            IP_HTTP_CLIENT = buildHttpClient(true, port);
+            httpClientAllowInsecureSsl = settings.isAllowInsecureSsl();
+        }
+
+        paused.set(false);
         running.set(true);
         urlsDone.set(0);
         urlsStarted.set(0);
         totalExpected.set(urls.size());   // seed with base URL count so bar never prematurely hits 100%
         totalDone.set(0);
+        scanGeneration.incrementAndGet(); // invalidate any in-flight appendFinding callbacks from prior scan
+        ScopeMonitor.clearWatched();      // stop proxy handler re-adding findings from previous scan targets
         seenUrls.clear();
         seenFindings.clear();   // reset per-scan dedup so a re-run always shows all findings fresh
+        seenPositions.clear();
+        tableModel.setRowCount(0);  // clear previous results so re-run doesn't duplicate rows
+        tableFindings.clear();
+        debugEntries.clear();       // reset debug suppression log for this scan run
         scanner.clearRequestDedup();
         statusScanned.set(0);
         statusFailed.set(0);
         statusAuth.set(0);
         targetStatusModel.setRowCount(0);
+        targetStatusExport.clear();
         updateSummaryBar();
-        startBtn.setEnabled(false);
+        startBtn.setText("⏸  Pause");
+        startBtn.setEnabled(true);
         siteMapBtn.setEnabled(false);
         stopBtn.setEnabled(true);
         statusLabel.setForeground(new Color(0, 100, 180));
@@ -757,7 +917,14 @@ public class BulkScanPanel {
             urls.forEach(ScopeMonitor::addWatchedUrl);
             // Re-set listener in case it was cleared; ensures proxy findings continue to
             // flow into the panel for the duration of this scan session.
-            ScopeMonitor.setListener((f, url) -> SwingUtilities.invokeLater(() -> appendFinding(f)));
+            ScopeMonitor.setListener((f, url) -> {
+                final int gen = scanGeneration.get();
+                SwingUtilities.invokeLater(() -> {
+                    if (scanGeneration.get() != gen) return;
+                    appendFinding(url != null && !url.isEmpty() && (f.targetUrl() == null || f.targetUrl().isEmpty())
+                            ? f.withTargetUrl(url) : f);
+                });
+            });
             ScopeMonitor.setActive(true);
         }
 
@@ -775,11 +942,11 @@ public class BulkScanPanel {
                     + "  OS=" + System.getProperty("os.name") + " " + System.getProperty("os.version")
                     + "  Java=" + System.getProperty("java.version"));
 
-            // Auto site-map sweep — runs in parallel with active fetch.
-            // Captures authenticated HTML responses recorded in Burp's site map
-            // during manual Burp Browser browsing: pages that redirect to an SSO
-            // provider (e.g. Microsoft Entra, Okta) when fetched without a session
-            // cookie would otherwise be missed by the active fetch below.
+            // Build a URL→HttpRequestResponse index of site map HTML pages for the watched
+            // hosts.  processUrl() uses this to prefer authenticated HTML (captured during
+            // Burp Browser browsing) over the unauthenticated active-fetch body when a
+            // target redirects to SSO/Entra.  No sweep is started here — the user can
+            // explicitly scan the site map via the "🗺 Scan Site Map" button.
             Set<String> watchedHosts = new HashSet<>();
             for (String u : urls) {
                 String norm = normaliseUrl(u);
@@ -789,23 +956,7 @@ public class BulkScanPanel {
                 }
             }
             if (!watchedHosts.isEmpty()) {
-                // Build a URL→HttpRequestResponse index of site map HTML pages for the watched
-                // hosts.  processUrl() uses this to prefer authenticated HTML (captured during
-                // Burp Browser browsing) over the unauthenticated active-fetch body.
-                siteMapIndex = buildSiteMapIndex(watchedHosts);
-                Set<String> hostsSnap = Collections.unmodifiableSet(watchedHosts);
-                siteMapSweepThread = new Thread(() -> {
-                    sweepSiteMapForHosts(hostsSnap);
-                    // Also sweep proxy history for entries not in the site map — primarily
-                    // captures authenticated JSON API endpoint responses (e.g. OAuth token
-                    // endpoints) that Burp records in proxy history but does not promote to
-                    // the site map unless the URL is in Burp's configured target scope.
-                    sweepProxyHistoryForHosts(hostsSnap);
-                    siteMapSweepThread = null;
-                    SwingUtilities.invokeLater(this::onSweepComplete);
-                }, "SecretSifter-SiteMapSweep");
-                siteMapSweepThread.setDaemon(true);
-                siteMapSweepThread.start();
+                siteMapIndex = buildSiteMapIndex();
             }
 
             int threads = (int) concurrencySpinner.getValue();
@@ -818,6 +969,8 @@ public class BulkScanPanel {
             for (String url : urls) {
                 executor.submit(() -> {
                     if (!running.get()) return;
+                    checkPause();           // wait here if the user paused; re-check below
+                    if (!running.get()) return;
                     urlsStarted.incrementAndGet();
                     try {
                         processUrl(url);
@@ -826,7 +979,7 @@ public class BulkScanPanel {
                     } finally {
                         totalDone.incrementAndGet();   // count this base URL as done in the progress bar
                         int mainDone  = urlsDone.incrementAndGet();
-                        int mainTotal = urls.size();
+                        int mainTotal = lastScanTotal;
                         if (mainDone >= mainTotal) {
                             SwingUtilities.invokeLater(() -> onScanComplete(mainTotal));
                         }
@@ -845,11 +998,24 @@ public class BulkScanPanel {
         // Apply the bulk-scan tier selection before scanning.
         settings.setTier(ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem()));
 
-        // Clear URL-dedup set so a prior browser scan or static scan does not
-        // silently suppress findings here. Each "Scan Site Map" invocation is
-        // independent and must process every matching entry from scratch.
+        // Full reset — each "Scan Site Map" invocation is independent and must
+        // process every matching entry from scratch.
+        scanGeneration.incrementAndGet(); // invalidate any in-flight appendFinding callbacks from prior scan
+        ScopeMonitor.clearWatched();      // stop proxy handler re-adding findings from previous scan targets
         seenUrls.clear();
+        seenFindings.clear();          // prevent prior scan results from suppressing sitemap findings
+        seenPositions.clear();
         scanner.clearRequestDedup();
+        tableModel.setRowCount(0);     // clear previous findings from the table
+        tableFindings.clear();
+        debugEntries.clear();
+        statusScanned.set(0);
+        statusFailed.set(0);
+        statusAuth.set(0);
+        targetStatusModel.setRowCount(0);
+        targetStatusExport.clear();
+        updateSummaryBar();
+        updateCountBadges();
 
         // "Scan Site Map" always scans ALL entries — the URL list is for active fetch only.
         final Set<String> watchedHosts = Collections.emptySet();
@@ -886,15 +1052,30 @@ public class BulkScanPanel {
                 + "  watchedHosts=" + (filterByHost ? watchedHosts : "ALL")
                 + "  EDT=" + SwingUtilities.isEventDispatchThread());
 
+        paused.set(false);
         running.set(true);
+        startBtn.setText("⏸  Pause");
+        startBtn.setEnabled(true);
         stopBtn.setEnabled(true);
 
         Thread t = new Thread(() -> {
             try {
                 int scanned = 0;
+                int processed = 0;
+                int total = siteMapSnapshot.size();
                 int skippedNoMatch = 0, skippedNoCt = 0;
                 for (burp.api.montoya.http.message.HttpRequestResponse rr : siteMapSnapshot) {
                     if (!running.get()) break;
+                    checkPause();
+                    if (!running.get()) break;
+                    processed++;
+                    // Update status bar every 25 items so the user can see progress
+                    if (processed % 25 == 0 || processed == 1) {
+                        final int smP = processed, smTotal = total, smS = scanned;
+                        SwingUtilities.invokeLater(() ->
+                            statusLabel.setText("Scanning site map… " + smP + " / " + smTotal
+                                    + " items (" + smS + " scanned)"));
+                    }
                     if (rr.response() == null || rr.request() == null) continue;
                     String itemUrl = rr.request().url();
                     if (itemUrl == null || itemUrl.isBlank()) continue;
@@ -911,8 +1092,7 @@ public class BulkScanPanel {
                         }
                     } catch (Exception ignored) {}
                     // Cross-origin: check Referer header for API calls made from a watched host
-                    // (e.g. api.example.com called from app.example.com)
-                    if (!matches) {
+                    if (!matches && ScopeMonitor.isCrossOriginFollow()) {
                         String referer = rr.request().headerValue("Referer");
                         if (referer != null && !referer.isBlank()) {
                             try {
@@ -925,20 +1105,19 @@ public class BulkScanPanel {
                                 }
                             } catch (Exception ignored) {}
                         }
-                    }
-                    // Also check Origin header — XHR/Fetch requests always include it
-                    if (!matches) {
-                        String origin = rr.request().headerValue("Origin");
-                        if (origin != null && !origin.isBlank()) {
-                            try {
-                                String originHost = new java.net.URL(origin).getHost().toLowerCase();
-                                for (String wh : watchedHosts) {
-                                    if (originHost.equals(wh) || originHost.endsWith("." + wh)) {
-                                        matches = true;
-                                        break;
+                        if (!matches) {
+                            String origin = rr.request().headerValue("Origin");
+                            if (origin != null && !origin.isBlank()) {
+                                try {
+                                    String originHost = new java.net.URL(origin).getHost().toLowerCase();
+                                    for (String wh : watchedHosts) {
+                                        if (originHost.equals(wh) || originHost.endsWith("." + wh)) {
+                                            matches = true;
+                                            break;
+                                        }
                                     }
-                                }
-                            } catch (Exception ignored) {}
+                                } catch (Exception ignored) {}
+                            }
                         }
                     }
                     if (filterByHost && !matches) { skippedNoMatch++; continue; }
@@ -982,6 +1161,8 @@ public class BulkScanPanel {
                                            : ct;
                             scanAndAppend(body, finalCt, itemUrl, rr);
                             scanned++;
+                            statusScanned.incrementAndGet();
+                            SwingUtilities.invokeLater(this::updateSummaryBar);
                         }
                     }
 
@@ -1016,9 +1197,11 @@ public class BulkScanPanel {
                     // do not overwrite the "Stopped." message or re-enable/disable buttons.
                     boolean wasRunning = running.getAndSet(false);
                     if (!wasRunning) return;
+                    paused.set(false);
                     stopScanTimer();
                     progressBar.setIndeterminate(false);
                     progressBar.setString("");
+                    startBtn.setText("▶  Start Scan");
                     startBtn.setEnabled(true);
                     siteMapBtn.setEnabled(true);
                     stopBtn.setEnabled(false);
@@ -1030,9 +1213,11 @@ public class BulkScanPanel {
             } catch (Exception e) {
                 debugLog("Site map scan error: " + e);
                 SwingUtilities.invokeLater(() -> {
+                    paused.set(false);
                     stopScanTimer();
                     progressBar.setIndeterminate(false);
                     progressBar.setString("");
+                    startBtn.setText("▶  Start Scan");
                     startBtn.setEnabled(true);
                     siteMapBtn.setEnabled(true);
                     stopBtn.setEnabled(false);
@@ -1222,7 +1407,6 @@ public class BulkScanPanel {
                 String phUrl = prr.request().url();
                 if (phUrl == null || settings.isExternalCdn(phUrl)) continue;
 
-                // Match against watched hosts (direct host + cross-origin Referer/Origin)
                 boolean matches = false;
                 try {
                     String host = new java.net.URL(phUrl).getHost().toLowerCase();
@@ -1230,7 +1414,7 @@ public class BulkScanPanel {
                         if (host.equals(wh) || host.endsWith("." + wh)) { matches = true; break; }
                     }
                 } catch (Exception ignored) {}
-                if (!matches) {
+                if (!matches && ScopeMonitor.isCrossOriginFollow()) {
                     String referer = prr.request().headerValue("Referer");
                     if (referer != null && !referer.isBlank()) {
                         try {
@@ -1240,16 +1424,16 @@ public class BulkScanPanel {
                             }
                         } catch (Exception ignored) {}
                     }
-                }
-                if (!matches) {
-                    String origin = prr.request().headerValue("Origin");
-                    if (origin != null && !origin.isBlank()) {
-                        try {
-                            String originHost = new java.net.URL(origin).getHost().toLowerCase();
-                            for (String wh : watchedHosts) {
-                                if (originHost.equals(wh) || originHost.endsWith("." + wh)) { matches = true; break; }
-                            }
-                        } catch (Exception ignored) {}
+                    if (!matches) {
+                        String origin = prr.request().headerValue("Origin");
+                        if (origin != null && !origin.isBlank()) {
+                            try {
+                                String originHost = new java.net.URL(origin).getHost().toLowerCase();
+                                for (String wh : watchedHosts) {
+                                    if (originHost.equals(wh) || originHost.endsWith("." + wh)) { matches = true; break; }
+                                }
+                            } catch (Exception ignored) {}
+                        }
                     }
                 }
                 if (!matches) continue;
@@ -1305,42 +1489,70 @@ public class BulkScanPanel {
      * active-fetch HTML body with the authenticated site map body for HTML scanning and
      * {@code <script src>} extraction.
      */
-    private Map<String, HttpRequestResponse> buildSiteMapIndex(Set<String> watchedHosts) {
+    private Map<String, HttpRequestResponse> buildSiteMapIndex() {
         Map<String, HttpRequestResponse> index = new HashMap<>();
         try {
             for (HttpRequestResponse rr : api.siteMap().requestResponses()) {
                 if (rr.request() == null || rr.response() == null) continue;
                 int status = rr.response().statusCode();
                 if (status < 200 || status >= 300) continue;
-                String ct = rr.response().headerValue("Content-Type");
-                if (ct == null) continue;
-                String ctLc = ct.toLowerCase();
-                if (!ctLc.contains("text/html") && !ctLc.contains("application/xhtml")) continue;
                 String url = rr.request().url();
                 if (url == null) continue;
-                try {
-                    String host = new java.net.URL(url).getHost().toLowerCase();
-                    for (String wh : watchedHosts) {
-                        if (host.equals(wh) || host.endsWith("." + wh)) {
-                            // Normalise: strip query/fragment + trailing slash for matching
-                            String normUrl = url.split("[?#]")[0].replaceAll("/$", "");
-                            index.putIfAbsent(normUrl, rr);
-                            break;
-                        }
-                    }
-                } catch (Exception ignored) {}
+                // Normalise: strip query/fragment + trailing slash for O(1) lookup
+                String normUrl = url.split("[?#]")[0].replaceAll("/$", "");
+                index.putIfAbsent(normUrl, rr);
             }
         } catch (Exception e) {
             debugLog("buildSiteMapIndex: " + e.toString());
         }
-        debugLog("buildSiteMapIndex: indexed " + index.size() + " HTML page(s).");
+        debugLog("buildSiteMapIndex: indexed " + index.size() + " sitemap entr(ies).");
         return index;
     }
 
+
+
     public void stopScan() {
+        paused.set(false);
         running.set(false);
+        synchronized (pauseLock) { pauseLock.notifyAll(); }   // wake any paused workers
         if (executor != null) executor.shutdownNow();
         onScanComplete(-1);
+    }
+
+    // ── Pause / Resume helpers ────────────────────────────────────────────────
+
+    /**
+     * Workers call this at the start of each new URL task.
+     * If the scan is paused, the calling thread blocks here (releasing no locks)
+     * until {@link #resumeScan()} or {@link #stopScan()} wakes it.
+     */
+    private void checkPause() {
+        while (paused.get() && running.get()) {
+            synchronized (pauseLock) {
+                if (!paused.get() || !running.get()) break;
+                try { pauseLock.wait(500); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+            }
+        }
+    }
+
+    /** Transitions RUNNING → PAUSED: workers block at their next URL boundary. */
+    private void pauseScan() {
+        paused.set(true);
+        startBtn.setText("▶  Resume");
+        statusLabel.setText(String.format("Paused — %d URL(s) done, %d finding(s)%s",
+                urlsDone.get(), tableFindings.size(), severitySummary()));
+        statusLabel.setForeground(new Color(180, 100, 0));
+    }
+
+    /** Transitions PAUSED → RUNNING: wakes all waiting workers. */
+    private void resumeScan() {
+        paused.set(false);
+        startBtn.setText("⏸  Pause");
+        statusLabel.setForeground(new Color(0, 100, 180));
+        statusLabel.setText(String.format("Scanning… %d URL(s) done, %d finding(s) so far",
+                urlsDone.get(), tableFindings.size()));
+        synchronized (pauseLock) { pauseLock.notifyAll(); }
     }
 
     /**
@@ -1362,7 +1574,73 @@ public class BulkScanPanel {
     public void syncFromSettings() {
         SwingUtilities.invokeLater(() -> {
             if (tierCombo != null) tierCombo.setSelectedItem(settings.getTier().name());
+            loadColumnPrefs();
         });
+    }
+
+    // ── Column visibility ──────────────────────────────────────────────────────
+
+    private void showColumnPicker(JComponent anchor) {
+        JPopupMenu menu = new JPopupMenu();
+        for (String name : COLS) {
+            if ("#".equals(name) || "".equals(name)) continue;
+            JCheckBoxMenuItem item = new JCheckBoxMenuItem(name, !hiddenColumnNames.contains(name));
+            item.addActionListener(ae -> setColumnVisible(name, item.isSelected()));
+            menu.add(item);
+        }
+        menu.show(anchor, 0, anchor.getHeight());
+    }
+
+    private void setColumnVisible(String colName, boolean visible) {
+        TableColumn col = null;
+        for (TableColumn c : allTableColumns) {
+            if (colName.equals(c.getHeaderValue())) { col = c; break; }
+        }
+        if (col == null) return;
+        if (!visible) {
+            if (hiddenColumnNames.add(colName))
+                resultsTable.getColumnModel().removeColumn(col);
+        } else {
+            if (hiddenColumnNames.remove(colName)) {
+                resultsTable.getColumnModel().addColumn(col);
+                int insertAt = 0;
+                for (String name : COLS) {
+                    if ("".equals(name)) continue;
+                    if (name.equals(colName)) break;
+                    if (!hiddenColumnNames.contains(name)) insertAt++;
+                }
+                resultsTable.getColumnModel().moveColumn(
+                        resultsTable.getColumnModel().getColumnCount() - 1, insertAt);
+            }
+        }
+        saveColumnPrefs();
+        rebalanceColumns();
+    }
+
+    private void rebalanceColumns() {
+        resultsTable.setAutoResizeMode(JTable.AUTO_RESIZE_ALL_COLUMNS);
+        resultsTable.revalidate();
+        resultsTable.repaint();
+        SwingUtilities.invokeLater(() -> resultsTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF));
+    }
+
+    private void saveColumnPrefs() {
+        try {
+            api.persistence().preferences().setString(
+                    "secretsifter.hidden_cols", String.join(",", hiddenColumnNames));
+        } catch (Exception ignored) {}
+    }
+
+    private void loadColumnPrefs() {
+        try {
+            String val = api.persistence().preferences().getString("secretsifter.hidden_cols");
+            if (val != null && !val.isBlank()) {
+                for (String name : val.split(",")) {
+                    String trimmed = name.trim();
+                    if (!trimmed.isEmpty()) setColumnVisible(trimmed, false);
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -1445,10 +1723,12 @@ public class BulkScanPanel {
 
     private void onScanComplete(int total) {
         stopProgressTimer();
+        paused.set(false);
         running.set(false);
         siteMapIndex = Collections.emptyMap();   // release site-map HTML bodies held since scan start
         if (total >= 0) lastScanTotal = total;
         currentFileLabel.setText("");
+        startBtn.setText("▶  Start Scan");
         startBtn.setEnabled(true);
         siteMapBtn.setEnabled(true);
         stopBtn.setEnabled(false);
@@ -1509,6 +1789,7 @@ public class BulkScanPanel {
 
     private void processUrl(String targetUrl) {
         if (!running.get()) return;
+        currentTargetUrl.set(targetUrl);  // record origin so scanAndAppend can annotate findings
         String normalisedInit = normaliseUrl(targetUrl);
         if (normalisedInit == null) return;
         SwingUtilities.invokeLater(() -> currentFileLabel.setText("→ " + normalisedInit));
@@ -1591,6 +1872,12 @@ public class BulkScanPanel {
                     + " → " + effectiveHost + " — browse in Burp Browser first to populate site map");
             debugLog("[BulkScan] Cross-host redirect detail: final=" + effectiveUrl
                     + "  script-host anchored to: " + originalHost);
+        } else if (isSoftFourOhFour(page.body())) {
+            // Server returned 200 but body looks like a CDN/ISP parking or error page.
+            // Show "?" so the user knows the real application is not available.
+            statusFailed.incrementAndGet();
+            recordTargetStatus(targetUrl, "?", "Soft-404?");
+            api.logging().logToOutput("[BulkScan] Soft-404 detected (200 but empty/error page): " + targetUrl);
         } else {
             statusScanned.incrementAndGet();
             recordTargetStatus(targetUrl, "+", "HTTP " + page.statusCode());
@@ -1642,107 +1929,31 @@ public class BulkScanPanel {
         // Collect scripts found in site map HTML pages AFTER headless populates it,
         // so multi-hop JS-redirect chains (e.g. IP → nawstart.html → 49 JS files) are captured.
         Set<String> postHeadlessScripts = new LinkedHashSet<>();
-        if (headlessBrowseBox.isSelected() && running.get()) {
+        // Only headless-visit HTML pages — JSON/JS/XML/CSS files don't execute JavaScript
+        // or trigger dynamic API calls, so Chrome adds no value over the plain active fetch.
+        // Also skip cross-host redirects (SSO/Entra login pages): Chrome cannot authenticate,
+        // and all three invokeAndWait calls (proxy-hist snap, site-map, proxy-hist sweep) would
+        // block the EDT for zero gain, which is what causes the scanner to appear hung on
+        // JSON manifest and redirect-target URLs.
+        String htmlCtLc2 = htmlCt != null ? htmlCt.toLowerCase() : "";
+        boolean isHtmlForHeadless = htmlCtLc2.contains("text/html") || htmlCtLc2.contains("application/xhtml");
+        if (headlessBrowseBox.isSelected() && running.get() && isHtmlForHeadless && !crossHostRedirect) {
             int proxyPort = (int) proxyPortSpinner.getValue();
             // Snapshot proxy history size before headless visit so we can scan only the
             // new entries that Chrome's CDP replay added.  Cross-origin JSON API endpoints
-            // (e.g. uat.studiogateway.chubb.com called from modelent.chubbworldview.com)
+            // (e.g. api.internal.example.com called from app.example.com)
             // appear in proxy history immediately after replay but may not appear in the
             // site map if the host is out of Burp's scope.
-            int[] proxyHistSnap = {-1};
-            try { SwingUtilities.invokeAndWait(() -> {
-                try { proxyHistSnap[0] = api.proxy().history().size(); } catch (Exception ignored) {}
-            }); } catch (Exception ignored) {}
+            // Snapshot proxy history size before headless — called directly from background
+            // thread (api.proxy().history() is not Swing-backed, unlike api.siteMap()).
+            int proxyHistSnapSize = -1;
+            try { proxyHistSnapSize = api.proxy().history().size(); } catch (Exception ignored) {}
+
             String headlessDom = headlessVisit(normalised, proxyPort);
-            // Sweep the live site map for all HTML pages now added by Chrome
-            String targetHost;
-            try { targetHost = new java.net.URL(baseUrl).getHost().toLowerCase(); }
-            catch (Exception ignored) { targetHost = null; }
-            if (targetHost != null) {
-                // Fetch site-map snapshot on the EDT — on macOS the model is Swing-backed
-                // and requestResponses() returns an empty list from a background thread.
-                @SuppressWarnings("unchecked")
-                List<HttpRequestResponse>[] postRef = new List[]{List.of()};
-                try { SwingUtilities.invokeAndWait(() -> postRef[0] = api.siteMap().requestResponses()); }
-                catch (Exception ignored) {}
-                try {
-                    for (HttpRequestResponse smRr : postRef[0]) {
-                        if (smRr.request() == null || smRr.response() == null) continue;
-                        int s = smRr.response().statusCode();
-                        if (s < 200 || s >= 300) continue;
-                        String smUrl = smRr.request().url();
-                        if (smUrl == null) continue;
-                        String smHost;
-                        try { smHost = new java.net.URL(smUrl).getHost().toLowerCase(); }
-                        catch (Exception ignored) { continue; }
-                        if (!smHost.equals(targetHost)) {
-                            // Cross-origin: scan new JSON/API responses whose request Referer
-                            // points to the target (i.e. loaded by Chrome while on the target page).
-                            // Catches pre-auth API calls to sub-domains / API gateways that ScopeMonitor
-                            // may miss when the Referer header is absent from the request.
-                            if (settings.isExternalCdn(smUrl)) { continue; }
-                            String smCt2 = smRr.response().headerValue("Content-Type");
-                            if (smCt2 != null) {
-                                String smCt2Lc = smCt2.toLowerCase();
-                                boolean isApiResp = smCt2Lc.contains("application/json")
-                                        || smCt2Lc.contains("+json");
-                                if (isApiResp && smRr.request() != null) {
-                                    String referer = smRr.request().headerValue("Referer");
-                                    if (referer != null) {
-                                        try {
-                                            String refHost = new java.net.URL(referer).getHost().toLowerCase();
-                                            if (refHost.equals(targetHost)) {
-                                                String smBody2 = smRr.response().bodyToString();
-                                                if (smBody2 != null && !smBody2.isBlank()) {
-                                                    scanAndAppend(smBody2, smCt2, smUrl, smRr);
-                                                }
-                                            }
-                                        } catch (Exception ignored) {}
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        if (settings.isExternalCdn(smUrl)) continue;
-                        String smCt = smRr.response().headerValue("Content-Type");
-                        if (smCt == null) continue;
-                        String smCtLc = smCt.toLowerCase();
-                        String smUrlLc = smUrl.toLowerCase().replaceAll("[?#].*$", "");
-                        boolean smIsHtml = smCtLc.contains("text/html") || smCtLc.contains("application/xhtml");
-                        boolean smIsJs   = smCtLc.contains("javascript") || smCtLc.contains("ecmascript")
-                                           || smUrlLc.endsWith(".js") || smUrlLc.endsWith(".mjs");
-                        boolean smIsJson = smCtLc.contains("application/json") || smCtLc.contains("+json")
-                                           || smUrlLc.endsWith(".json");
 
-                        if (!smIsHtml && !smIsJs && !smIsJson) continue;
-
-                        String smBody = smRr.response().bodyToString();
-                        if (smBody == null || smBody.isBlank()) continue;
-
-                        // Scan this resource directly (dedup prevents double-scanning).
-                        scanAndAppend(smBody, smCt, smUrl, smRr);
-
-                        if (smIsHtml) {
-                            // Collect script references for the active-fetch JS loop below.
-                            postHeadlessScripts.addAll(SecretScanner.extractScriptSrcs(smBody, smUrl));
-                            postHeadlessScripts.addAll(SecretScanner.extractPreloadLinks(smBody, smUrl));
-                        }
-                        if (smIsJs) {
-                            // Collect chunk references from JS bundles so they are also fetched.
-                            postHeadlessScripts.addAll(SecretScanner.extractWebpackChunkUrls(smBody, smUrl));
-                        }
-                    }
-                    if (!postHeadlessScripts.isEmpty())
-                        debugLog("[HeadlessSiteMap] Found " + postHeadlessScripts.size()
-                                + " additional URL(s) from site map for: " + targetHost);
-                } catch (Exception e) {
-                    debugLog("[HeadlessSiteMap] Sweep failed: " + e.toString());
-                }
-            }
-            // Extract script URLs directly from the rendered DOM.  This is the primary
-            // discovery path when the Burp site map is empty (no prior browsing) — the
-            // rendered DOM contains dynamically-injected <script> tags that the static
-            // HTML fetch above cannot see.
+            // Extract script URLs from the rendered DOM (post-headless).
+            // Primary discovery path when the Burp site map is empty — the rendered DOM
+            // contains dynamically-injected <script> tags invisible to the static fetch.
             if (headlessDom != null && !headlessDom.isBlank()) {
                 List<String> domScripts = new ArrayList<>();
                 domScripts.addAll(SecretScanner.extractScriptSrcs(headlessDom, baseUrl));
@@ -1754,22 +1965,22 @@ public class BulkScanPanel {
             }
 
             // ── Proxy history sweep ──────────────────────────────────────────────────
-            // CDP replay sends requests through Burp's proxy so they appear in proxy
-            // history.  Cross-origin API endpoints (e.g. uat.studiogateway.chubb.com)
+            // CDP replay sends all requests through Burp's proxy so they appear in proxy
+            // history.  Cross-origin API endpoints (e.g. api.internal.example.com)
             // may not appear in the site map if they are out of Burp's scope, but they
-            // ARE in proxy history.  Scan all new entries that appeared since proxyHistSnap.
+            // ARE in proxy history.  Scan all new entries that appeared since the snap.
             // Covers JSON API responses with tokens and request headers with API keys.
-            if (proxyHistSnap[0] >= 0) {
-                @SuppressWarnings("unchecked")
-                java.util.List<burp.api.montoya.proxy.ProxyHttpRequestResponse>[] phRef =
-                        new java.util.List[]{java.util.List.of()};
-                try { SwingUtilities.invokeAndWait(() -> {
-                    try { phRef[0] = api.proxy().history(); } catch (Exception ignored) {}
-                }); } catch (Exception ignored) {}
+            // NOTE: The old post-headless site-map sweep (invokeAndWait → siteMap.requestResponses)
+            // was removed because it caused EDT starvation with concurrent threads — the proxy
+            // history sweep here covers the same content without blocking the EDT.
+            if (proxyHistSnapSize >= 0) {
+                java.util.List<burp.api.montoya.proxy.ProxyHttpRequestResponse> phList;
+                try { phList = api.proxy().history(); }
+                catch (Exception ignored) { phList = java.util.List.of(); }
                 int phSwept = 0;
-                for (int hi = proxyHistSnap[0]; hi < phRef[0].size(); hi++) {
+                for (int hi = proxyHistSnapSize; hi < phList.size(); hi++) {
                     if (!running.get()) break;
-                    burp.api.montoya.proxy.ProxyHttpRequestResponse prr = phRef[0].get(hi);
+                    burp.api.montoya.proxy.ProxyHttpRequestResponse prr = phList.get(hi);
                     if (prr.request() == null || prr.response() == null) continue;
                     int s = prr.response().statusCode();
                     if (s < 200 || s >= 300) continue;
@@ -1785,23 +1996,45 @@ public class BulkScanPanel {
                                        || phUrlLc.endsWith(".json");
                     boolean phIsHtml = phCtLc.contains("text/html") || phCtLc.contains("application/xhtml");
                     if (!phIsJs && !phIsJson && !phIsHtml) continue;
-                    // Scan response body — bypass seenUrls guard so that fresh proxy history
-                    // responses captured during the CDP headless visit are always scanned,
-                    // even if the same URL was already picked up by the pre-headless
-                    // site-map sweep (sweepSiteMapForHosts adds the raw URL to seenUrls,
-                    // which would otherwise silently block the fresh CDP response here).
+                    // Atomically claim this URL — skip if already scanned by another concurrent
+                    // thread (multiple threads share proxyHistSnap windows that overlap when all
+                    // headless visits start at roughly the same time).
+                    if (settings.isExternalCdn(phUrl)) continue;
+                    if (!seenUrls.add(phUrl)) continue;
                     String phBody = prr.response().bodyToString();
                     if (phBody != null && !phBody.isBlank()) {
                         String phLabelledUrl = sourceLabel(phUrl, phCt);
-                        List<SecretFinding> phFindings = scanner.scanText(phBody, phCt, phLabelledUrl);
-                        // Mark URL as seen so the script-src following loop doesn't re-fetch this
-                        // URL via HTTP — it was just scanned from Chrome's proxy history capture.
-                        seenUrls.add(phUrl);
+                        List<SecretScanner.DebugEntry> phDbg = new ArrayList<>();
+                        List<SecretFinding> phFindings = scanner.scanTextDebug(phBody, phCt, phLabelledUrl, phDbg);
+                        debugEntries.addAll(phDbg);
                         debugLog("[HeadlessProxy] " + phFindings.size()
                                 + " finding(s) in: " + phLabelledUrl
                                 + "  (body=" + phBody.length() + " chars)");
+                        // Resolve targetUrl before crossing to EDT (ThreadLocal unavailable there).
+                        // Primary: currentTargetUrl — the entry-point that triggered this headless visit.
+                        // Fallback: Referer/Origin request header when the API host differs from the
+                        // target host (e.g. api.internal.example.com API called from portal.example.com).
+                        String phTargetUrl = currentTargetUrl.get() != null ? currentTargetUrl.get() : "";
+                        if (phTargetUrl.isEmpty()) {
+                            try {
+                                String refererHdr = prr.request().headerValue("Referer");
+                                if (refererHdr == null) refererHdr = prr.request().headerValue("Origin");
+                                if (refererHdr != null && !refererHdr.isBlank()) {
+                                    String refHost = new java.net.URL(refererHdr).getHost().toLowerCase();
+                                    String mapped = hostToTargetUrl.get(refHost);
+                                    if (mapped != null) phTargetUrl = mapped;
+                                }
+                            } catch (Exception ignored) {}
+                        }
+                        final String finalPhTargetUrl = phTargetUrl;
+                        final int phGen = scanGeneration.get();
                         for (SecretFinding pf : phFindings) {
-                            SwingUtilities.invokeLater(() -> appendFinding(pf));
+                            SecretFinding annotated = finalPhTargetUrl.isEmpty() ? pf
+                                    : pf.withTargetUrl(finalPhTargetUrl);
+                            SwingUtilities.invokeLater(() -> {
+                                if (scanGeneration.get() != phGen) return;
+                                appendFinding(annotated);
+                            });
                         }
                         phSwept++;
                     }
@@ -2167,7 +2400,7 @@ public class BulkScanPanel {
                     "--remote-debugging-port=0",
                     // Route all Chrome traffic through Burp proxy so SecretProxyHandler captures
                     // every response body (including cross-origin POST token endpoints like
-                    // uat.studiogateway.chubb.com/enterprise.operations.authorization).
+                    // api.internal.example.com/auth/token).
                     // Without this, POST response bodies never go through Burp and CDP
                     // getResponseBody evicts the buffer before we can fetch it.
                     "--proxy-server=http://127.0.0.1:" + proxyPort,
@@ -2342,6 +2575,10 @@ public class BulkScanPanel {
                     true).get(5, TimeUnit.SECONDS);
             tabInbox.poll(3, TimeUnit.SECONDS); // drain the Network.enable ack
 
+            tabWs.sendText("{\"id\":9,\"method\":\"Page.enable\",\"params\":{}}",
+                    true).get(5, TimeUnit.SECONDS);
+            tabInbox.poll(2, TimeUnit.SECONDS); // drain the Page.enable ack
+
             // Block asset types at Chrome level — images, fonts, CSS, and media never
             // contain secrets. Blocking them reduces Chrome's download overhead and
             // speeds up scanning across 100 concurrent domains.
@@ -2379,7 +2616,12 @@ public class BulkScanPanel {
             final int[] inlineBodyIdCounter = {1000};
 
             long deadline = System.currentTimeMillis() + 25_000;
-            while (System.currentTimeMillis() < deadline) {
+            // When Page.loadEventFired fires we switch to a shorter grace deadline so
+            // in-flight XHR/fetch calls (fired by JS on DOMContentLoaded) can complete,
+            // then we exit rather than waiting the full 25 s.
+            long graceDeadline = Long.MAX_VALUE;
+            while (System.currentTimeMillis() < deadline
+                    && System.currentTimeMillis() < graceDeadline) {
                 String msg = tabInbox.poll(200, TimeUnit.MILLISECONDS);
                 if (msg == null) continue;
                 try {
@@ -2433,7 +2675,7 @@ public class BulkScanPanel {
                                 || "Font".equals(resourceType) || "Media".equals(resourceType)) continue;
                         // Block CDN / analytics / SSO domains listed in the CDN blocklist.
                         // All other cross-origin URLs — including backend API gateways like
-                        // uat.studiogateway.chubb.com called from modelent.chubbworldview.com —
+                        // api.internal.example.com called from app.example.com —
                         // are captured because they carry secrets in request headers and
                         // JSON response bodies.
                         if (settings.isExternalCdn(u)) continue;
@@ -2470,6 +2712,16 @@ public class BulkScanPanel {
                         // the redirect's empty/"text/html" MIME and cause wantBody=false in
                         // loadingFinished, silently skipping the response body entirely.
                         cdpRespTypes.put(reqId, mime);
+
+                    } else if ("Page.loadEventFired".equals(evtMethod)) {
+                        // Page has fully loaded — allow 5 s grace for in-flight XHR/fetch
+                        // calls triggered by JS on DOMContentLoaded, then exit early.
+                        // Cuts the worst-case wait from 25 s to ~5 s for simple login pages
+                        // and SPAs that fire all API calls on page load.
+                        if (graceDeadline == Long.MAX_VALUE) {
+                            graceDeadline = System.currentTimeMillis() + 5_000;
+                            debugLog("[Headless] CDP: Page.loadEventFired — grace window started for: " + pageUrl);
+                        }
 
                     } else if ("Network.loadingFinished".equals(evtMethod)) {
                         // Response body is guaranteed to be in Chrome's CDP buffer at this
@@ -2752,44 +3004,189 @@ public class BulkScanPanel {
     private void scanAndAppend(String body, String contentType, String url,
                                 HttpRequestResponse rr) {
         if (body == null || body.isBlank()) return;
+        // CDN check: skip analytics/asset CDN domains regardless of how this path was reached.
+        if (url != null && settings.isExternalCdn(url)) return;
         // URL-based dedup: same URL = same resource, no need to scan twice.
         if (!seenUrls.add(url != null ? url : "")) return;
         // Tag the URL with its content type for clear source identification.
         String labelledUrl = sourceLabel(url, contentType);
-        List<SecretFinding> findings = scanner.scanText(body, contentType, labelledUrl);
+        List<SecretScanner.DebugEntry> localDbg = new ArrayList<>();
+        List<SecretFinding> findings = scanner.scanTextDebug(body, contentType, labelledUrl, localDbg);
+        debugEntries.addAll(localDbg);
         api.logging().logToOutput("[BulkScan] " + findings.size() + " finding(s) in: " + labelledUrl);
         debugLog("[BulkScan] body=" + body.length() + " chars: " + labelledUrl);
         // Push to Burp Dashboard / site map: one AuditIssue per (URL, rule) group.
-        // rr may be null when called from the active-fetch path (fetchUrl returns no
-        // HttpRequestResponse); toGroupedAuditIssue handles null safely — markers are
-        // skipped but the AuditIssue URL and detail are still correct.
+        // fetchUrl() returns requestResponse=null (Java HttpClient, not Burp proxy), so rr
+        // is usually null here.  Two-level lookup:
+        //   1. Exact URL in siteMapIndex  → best case, gives response highlighting.
+        //   2. Target root URL in siteMapIndex → fallback so JS/JSON files discovered via
+        //      script-src following (fetched directly, not proxied) still appear in the site
+        //      map under the target entry instead of being hidden by "Hiding not found items".
         if (!findings.isEmpty()) {
+            HttpRequestResponse effectiveRr = rr;
+            String issueUrlOverride = null;
+            if (effectiveRr == null && url != null) {
+                String cleanUrl = url.replaceAll(" \\[.*?\\]", "");
+                HttpRequestResponse indexed = siteMapIndex.get(cleanUrl);
+                if (indexed != null) {
+                    effectiveRr = indexed;
+                } else {
+                    // JS/JSON file not in sitemap — fall back to target root so issue is visible.
+                    String target = currentTargetUrl.get();
+                    if (target != null && !target.isBlank()) {
+                        String targetOrigin = toOrigin(target);
+                        HttpRequestResponse targetRr = siteMapIndex.get(targetOrigin);
+                        if (targetRr == null)
+                            targetRr = siteMapIndex.get(targetOrigin.replaceAll("/$", ""));
+                        // Always redirect to target root so the issue is visible in the sitemap.
+                        // Headless Browse adds the target URL to the sitemap during the scan,
+                        // AFTER buildSiteMapIndex() ran — so targetRr is often null here even
+                        // though the root URL will be present in the sitemap by the time the
+                        // issue is added.  The 9-arg AuditIssue filed at targetOrigin is NOT
+                        // hidden by "Hiding not found items" once headless browse populates it.
+                        issueUrlOverride = targetOrigin;
+                        if (targetRr != null)
+                            effectiveRr = targetRr;
+                    }
+                }
+            }
+            final HttpRequestResponse rrForIssue = effectiveRr;
+            final String              issueUrl   = issueUrlOverride;
             Map<String, java.util.List<SecretFinding>> grouped = new LinkedHashMap<>();
             for (SecretFinding f : findings)
                 grouped.computeIfAbsent(f.ruleName(), k -> new ArrayList<>()).add(f);
             for (java.util.List<SecretFinding> group : grouped.values()) {
                 if (!SitemapDeduplicator.shouldAdd(group)) continue;
-                try { api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rr)); }
-                catch (Exception e) { debugLog("siteMap.add failed for " + url + ": " + e.toString()); }
+                try { api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rrForIssue, issueUrl)); }
+                catch (Exception e) { api.logging().logToError("[SecretSifter] siteMap.add failed for " + url + ": " + e); }
             }
         }
+        // Target attribution priority:
+        //  1. If the finding's source host matches one of the user's input targets, attribute
+        //     to that target — a target's own assets always belong to it, even when another
+        //     concurrent scan thread happened to fetch the URL first via cross-origin discovery.
+        //  2. Otherwise (third-party host like auth.example.com, CDN, etc.) attribute to the
+        //     scan thread's origin target captured from the ThreadLocal — this matches the user
+        //     intent that "Target-A genuinely calls a third-party → finding belongs to A".
+        // Capture both before crossing to EDT — ThreadLocal is not available on the EDT.
+        String originTarget = currentTargetUrl.get() != null ? currentTargetUrl.get() : "";
+        String originNorm   = originTarget.isEmpty() ? "" : toOrigin(originTarget);
+        final int saGen = scanGeneration.get();
         for (SecretFinding f : findings) {
-            SwingUtilities.invokeLater(() -> appendFinding(f));
+            String hostBased = lookupTargetByHost(f.sourceUrl());
+            String chosen    = hostBased != null ? hostBased : originNorm;
+            SecretFinding annotated = chosen.isEmpty() ? f : f.withTargetUrl(chosen);
+            SwingUtilities.invokeLater(() -> {
+                if (scanGeneration.get() != saGen) return;
+                appendFinding(annotated);
+            });
+        }
+    }
+
+    /**
+     * Returns the normalised target URL for the input target whose host matches the source URL's
+     * host, or {@code null} when the source host is not one of the user's input targets.
+     * Used by attribution logic so that a target's own assets always attribute to it, regardless
+     * of which thread fetched them. Strips display suffixes (e.g. " [JS]") before parsing.
+     */
+    private String lookupTargetByHost(String sourceUrl) {
+        if (sourceUrl == null || hostToTargetUrl.isEmpty()) return null;
+        try {
+            String cleanUrl = sourceUrl.replaceAll(" \\[.*?\\]", "");
+            String host = new java.net.URL(cleanUrl).getHost().toLowerCase();
+            String origin = hostToTargetUrl.get(host);
+            return origin != null ? toOrigin(origin) : null;
+        } catch (Exception ignored) {
+            return null;
         }
     }
 
     private void appendFinding(SecretFinding f) {
+        // Attribute to origin target if not already set (site map sweep, HAR, proxy paths
+        // don't go through processUrl/scanAndAppend where the ThreadLocal is captured).
+        // Also re-applies host-based attribution as a safety net for findings whose
+        // upstream emitter set the wrong target (e.g. cross-thread races on shared assets).
+        String hostBased = lookupTargetByHost(f.sourceUrl());
+        if (hostBased != null && (f.targetUrl() == null || f.targetUrl().isEmpty()
+                || !hostBased.equals(toOrigin(f.targetUrl())))) {
+            f = f.withTargetUrl(hostBased);
+        }
+
+        // Strict scope: drop findings whose source host is not in the target list.
+        if (!strictScopeHosts.isEmpty() && f.sourceUrl() != null) {
+            try {
+                String cleanUrl = f.sourceUrl().replaceAll(" \\[.*?\\]", "");
+                String host = new java.net.URL(cleanUrl).getHost().toLowerCase();
+                if (!strictScopeHosts.contains(host)) return;
+            } catch (Exception ignored) {}
+        }
+
         // Deduplicate: same rule + value seen via both headless-proxy path and active-fetch path.
         // Strip content-type label suffixes ([JSON], [JS], [HTML], [XML], [REQ-HEADERS]) from
         // sourceUrl before hashing so that the two scan paths (sweepSiteMapForHosts produces
         // "url [JSON]"; SecretProxyHandler produces "url") collapse to the same key.
+        // Strip content-type label (e.g. " [HTML]", " [JS]") from anywhere in the URL, not just
+        // the end.  When inline <script> blocks are scanned the label appears mid-string:
+        // "https://example.com/ [HTML]#inline-js" — the old end-anchor ($) failed to strip it,
+        // producing a different dedup key than the proxy-path URL "https://example.com/#inline-js"
+        // and causing duplicate findings for the same inline secret.
         String dedupUrl = f.sourceUrl() != null
-                ? f.sourceUrl().replaceAll(" \\[(JSON|JS|HTML|XML|REQ-HEADERS|REQ-BODY)\\]$", "")
+                ? f.sourceUrl().replaceAll(" \\[(JSON|JS|HTML|XML|REQ-HEADERS|REQ-BODY)\\]", "")
                 : "";
-        // Deduplicate on (url, value) only — the same secret caught by multiple rules
-        // (e.g. JWT_TOKEN_001 + GENERIC_KV + JSON_WALK all matching the same token)
-        // should appear once in the table.  ruleId is intentionally excluded.
-        if (!seenFindings.add(dedupUrl + ":" + f.matchedValue())) return;
+        // Normalize URL for dedup: strip query params and fragments so URL variants
+        // (login.aspx?SessionID=abc, login.aspx?lang=es) collapse to the same base URL
+        // for the host-extraction step below.
+        int qIdx = dedupUrl.indexOf('?');
+        int hIdx = dedupUrl.indexOf('#');
+        int cutAt = -1;
+        if (qIdx >= 0) cutAt = qIdx;
+        if (hIdx >= 0 && (cutAt < 0 || hIdx < cutAt)) cutAt = hIdx;
+        if (cutAt >= 0) dedupUrl = dedupUrl.substring(0, cutAt);
+        // Host-level value dedup: the same token appearing across multiple asset files on
+        // the same host (runtime.js, polyfill.js, scripts.js, main.78.js, …) represents
+        // one leaked credential, not N separate findings.  Extract just the hostname so
+        // different URL paths on the same host collapse to one row.
+        // Different subdomains (auth.example.com vs app.example.com) are kept separate.
+        String hostKey;
+        try {
+            java.net.URI dedupUri = new java.net.URI(dedupUrl);
+            String h = dedupUri.getHost();
+            hostKey = (h != null) ? h.toLowerCase() : dedupUrl;
+        } catch (Exception ignored) {
+            hostKey = dedupUrl;
+        }
+        // Cross-rule value normalisation: strip a leading "keyName=" prefix and surrounding
+        // quotes so that KV-style captures ("key=AIzaSy...", "apiKey = \"AIzaSy...\"") and
+        // bare-token captures ("AIzaSy...") from the same credential both normalise to the
+        // same bare token for dedup.  Only strips when the prefix is a plain identifier.
+        String normVal = f.matchedValue();
+        int eqIdx = normVal.indexOf('=');
+        if (eqIdx > 0 && eqIdx < normVal.length() - 1) {
+            String pfx = normVal.substring(0, eqIdx).trim();
+            if (pfx.matches("[A-Za-z][A-Za-z0-9_\\-]*")) {
+                normVal = normVal.substring(eqIdx + 1).replace("\"", "").replace("'", "").trim();
+            }
+        }
+        // Deduplicate on (host, normalised-value, line, match-offset) — same token at the same
+        // position on the same host = one row. Offset disambiguates per-occurrence within
+        // minified bundles where every match shares the same lineNumber. For source files with
+        // real line breaks, lineNumber alone is enough; for minified bundles, offset is what
+        // makes 15 same-line `resource: <uuid>` occurrences appear as 15 rows instead of one.
+        if (!seenFindings.add(hostKey + ":" + normVal + ":" + f.lineNumber() + ":" + f.matchOffset())) return;
+        // Position-level dedup: same rule at the same line of the same URL path is one
+        // finding even when the value changes across requests (freshly-generated JWTs,
+        // CSRF tokens, etc. on pages reachable via URL variants with different query params).
+        // JWT_TOKEN_001 uses position-only dedup because JWTs are fresh per session —
+        // the same structural finding appears at the same line with a different value on
+        // each page load.  All other rules include the normalised value in the key so that
+        // genuinely different secrets at the same line (e.g. two btoa credential pairs in
+        // a minified JS file both at line 1) are each reported as separate findings.
+        if (f.lineNumber() > 0) {
+            boolean positionOnly = "JWT_TOKEN_001".equals(f.ruleId());
+            String posKey = dedupUrl + "\0" + f.ruleId() + "\0" + f.lineNumber() + "\0" + f.keyName()
+                    + (positionOnly ? "" : "\0" + normVal);
+            if (!seenPositions.add(posKey)) return;
+        }
         tableFindings.add(f);
         int row = tableModel.getRowCount() + 1;
         tableModel.addRow(new Object[]{
@@ -2800,6 +3197,7 @@ public class BulkScanPanel {
                 f.keyName(),
                 f.matchedValue(),
                 f.sourceUrl(),
+                f.targetUrl() != null ? f.targetUrl() : "",
                 f.lineNumber(),
                 f.context() != null ? f.context().replace("\n", " ").strip() : "",
                 ""   // delete button column
@@ -3061,14 +3459,86 @@ public class BulkScanPanel {
 
     /** Appends one row to the Target Status table and refreshes the summary bar. */
     private void recordTargetStatus(String url, String icon, String detail) {
+        // Store full URL for export BEFORE display truncation
+        targetStatusExport.add(new String[]{icon, url != null ? url : "", detail});
         String display;
         try { display = new java.net.URL(url).getHost(); }
-        catch (Exception e) { display = url.length() > 50 ? url.substring(0, 50) + "…" : url; }
+        catch (Exception e) { display = url != null && url.length() > 50 ? url.substring(0, 50) + "…" : url; }
         String d = display;
         SwingUtilities.invokeLater(() -> {
             targetStatusModel.addRow(new Object[]{icon, d, detail});
             updateSummaryBar();
         });
+    }
+
+    /**
+     * Strips path, query, and fragment from a URL — returns just scheme://host[:port].
+     * Used to normalise targetUrl on findings so the exported CSV always shows the clean
+     * root target (e.g. "https://example.com") rather than a specific JS bundle path
+     * (e.g. "https://example.com/main.8fb5e3a.js") when the user inputs such URLs.
+     */
+    private static String toOrigin(String url) {
+        if (url == null || url.isBlank()) return url != null ? url : "";
+        try {
+            String u = url.startsWith("http") ? url : "https://" + url;
+            java.net.URL parsed = new java.net.URL(u);
+            int port = parsed.getPort();
+            String portPart = (port > 0 && port != 80 && port != 443) ? ":" + port : "";
+            return parsed.getProtocol() + "://" + parsed.getHost() + portPart;
+        } catch (Exception e) {
+            // Fallback: strip everything after the first slash following the scheme
+            int schemeEnd = url.indexOf("://");
+            if (schemeEnd < 0) return url;
+            int slashAfterHost = url.indexOf('/', schemeEnd + 3);
+            return slashAfterHost > 0 ? url.substring(0, slashAfterHost) : url;
+        }
+    }
+
+    /**
+     * Returns true when an HTTP 200 response body looks like a CDN/ISP parking page
+     * rather than the real application.  Signals a "soft-404" so the status icon
+     * shows "?" instead of "+" to avoid misleading the user.
+     *
+     * Heuristics (any one triggers):
+     *   • Body is blank or under 512 bytes
+     *   • No opening <html tag at all
+     *   • Contains known parking/error phrases
+     */
+    private static boolean isSoftFourOhFour(String body) {
+        if (body == null || body.isBlank()) return true;
+        String lc = body.toLowerCase();
+        // Only apply HTML-specific checks when the body actually looks like HTML.
+        // JS config files (ksbiz_config.js etc.) and JSON responses have no <html> tag —
+        // they should never be flagged as soft-404s based on HTML structure.
+        boolean looksLikeHtml = lc.contains("<html") || lc.contains("<!doctype");
+        if (!looksLikeHtml) {
+            // Non-HTML: only flag completely empty or trivially short bodies (< 20 chars)
+            return body.length() < 20;
+        }
+        // HTML-specific: flag suspiciously small pages (parking/error pages are always tiny)
+        if (body.length() < 512) return true;
+        // Common CDN / domain-parking / server-error phrases
+        String[] errorPhrases = {
+            "domain not configured",
+            "domain has expired",
+            "this domain is for sale",
+            "site not found",
+            "page not found",
+            "default web site page",
+            "web site is coming soon",
+            "account suspended",
+            "service unavailable",
+            "no web site is configured",
+            "this site can\u2019t be reached",   // chrome error page (rare via proxy)
+            "403 forbidden",
+            "parked domain",
+            "unknown host",                      // Burp proxy error page (DNS resolution failed)
+            "burp suite",                        // any other Burp proxy error page
+        };
+        for (String phrase : errorPhrases) {
+            if (lc.contains(phrase)) return true;
+        }
+        return false;
     }
 
     /** Refreshes the three summary-bar labels from current atomic counters. */
@@ -3219,9 +3689,18 @@ public class BulkScanPanel {
         harThread.start();
     }
 
-    private void clearResults() {
+    void clearResults() {
+        // Advance generation first — any invokeLater callbacks already in the EDT queue
+        // that captured the old generation will see the mismatch and discard their finding.
+        scanGeneration.incrementAndGet();
+        // Stop passive re-population: clear ScopeMonitor's watched host set so the proxy
+        // handler stops routing findings into this panel. On Windows (system proxy) Burp
+        // receives continuous background traffic; without this, every request to a previously
+        // scanned host re-adds findings as soon as seenFindings is wiped below.
+        ScopeMonitor.clearWatched();
         tableModel.setRowCount(0);
         tableFindings.clear();
+        debugEntries.clear();
         seenUrls.clear();
         seenFindings.clear();
         scanner.clearRequestDedup();
@@ -3298,16 +3777,86 @@ public class BulkScanPanel {
         File out = ensureExtension(fc.getSelectedFile(), ".csv");
         try (PrintWriter pw = new PrintWriter(new FileWriter(out, StandardCharsets.UTF_8))) {
             // Header
-            pw.println("Rule ID,Rule Name,Key,Value,Severity,Confidence,Line,URL,Context");
+            pw.println("Rule ID,Rule Name,Key,Value,Severity,Confidence,Line,Target URL,Source URL,Context");
             for (SecretFinding f : snapshot) {
-                pw.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\"%n",
+                pw.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\"%n",
                         csvEsc(f.ruleId()), csvEsc(f.ruleName()),
                         csvEsc(f.keyName()), csvEsc(f.matchedValue()),
                         f.severity(), f.confidence(), f.lineNumber(),
+                        csvEsc(f.targetUrl() != null ? f.targetUrl() : ""),
                         csvEsc(f.sourceUrl()),
                         csvEsc(f.context() != null ? f.context().replace("\n", " ") : ""));
             }
             statusLabel.setText("CSV saved: " + out.getName());
+            statusLabel.setForeground(new Color(0, 130, 0));
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(rootPanel,
+                    "Failed to save CSV: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void exportDebugCsv() {
+        List<SecretScanner.DebugEntry> snapshot;
+        synchronized (debugEntries) {
+            snapshot = new ArrayList<>(debugEntries);
+        }
+        if (snapshot.isEmpty()) {
+            JOptionPane.showMessageDialog(rootPanel,
+                    "No suppressed findings recorded.\n\nRun a Bulk Scan first — suppressed entries are\ncollected automatically during each scan.",
+                    "Debug Export", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Export suppressed findings (debug)");
+        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("CSV files (*.csv)", "csv"));
+        fc.setSelectedFile(new File("secretsifter-debug-suppressed.csv"));
+        if (fc.showSaveDialog(rootPanel) != JFileChooser.APPROVE_OPTION) return;
+        File out = ensureExtension(fc.getSelectedFile(), ".csv");
+        try (PrintWriter pw = new PrintWriter(new FileWriter(out, StandardCharsets.UTF_8))) {
+            pw.println("Rule ID,Key,Value,Suppression Reason,Source URL");
+            for (SecretScanner.DebugEntry e : snapshot) {
+                pw.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"%n",
+                        csvEsc(e.ruleId()),
+                        csvEsc(e.keyName()),
+                        csvEsc(e.value()),
+                        csvEsc(e.reason()),
+                        csvEsc(e.url()));
+            }
+            statusLabel.setText("Debug CSV saved: " + out.getName() + "  (" + snapshot.size() + " suppressed entries)");
+            statusLabel.setForeground(new Color(0, 130, 0));
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(rootPanel,
+                    "Failed to save debug CSV: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void exportTargetStatusCsv() {
+        List<String[]> snapshot;
+        synchronized (targetStatusExport) {
+            snapshot = new ArrayList<>(targetStatusExport);
+        }
+        if (snapshot.isEmpty()) {
+            JOptionPane.showMessageDialog(rootPanel,
+                    "No target status data to export.\n\nRun a Bulk Scan first.",
+                    "Export Target Status", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("Export target status as CSV");
+        fc.setFileFilter(new FileNameExtensionFilter("CSV files (*.csv)", "csv"));
+        fc.setSelectedFile(new File("secretsifter-target-status.csv"));
+        if (fc.showSaveDialog(rootPanel) != JFileChooser.APPROVE_OPTION) return;
+        File out = ensureExtension(fc.getSelectedFile(), ".csv");
+        try (PrintWriter pw = new PrintWriter(new FileWriter(out, StandardCharsets.UTF_8))) {
+            pw.println("Status,Target URL,Detail");
+            for (String[] row : snapshot) {
+                pw.printf("\"%s\",\"%s\",\"%s\"%n",
+                        csvEsc(row[0]),   // + / × / ~ / ?
+                        csvEsc(row[1]),   // full target URL
+                        csvEsc(row[2]));  // detail (e.g. "HTTP 200", "Unreachable", "SSO→…")
+            }
+            statusLabel.setText("Target status CSV saved: " + out.getName()
+                    + "  (" + snapshot.size() + " target(s))");
             statusLabel.setForeground(new Color(0, 130, 0));
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(rootPanel,
@@ -3338,8 +3887,9 @@ public class BulkScanPanel {
                 obj.addProperty("severity",     f.severity());
                 obj.addProperty("confidence",   f.confidence());
                 obj.addProperty("lineNumber",   f.lineNumber());
-                obj.addProperty("sourceUrl",    f.sourceUrl() != null ? f.sourceUrl() : "");
-                obj.addProperty("context",      f.context()   != null ? f.context()   : "");
+                obj.addProperty("targetUrl",    f.targetUrl()  != null ? f.targetUrl()  : "");
+                obj.addProperty("sourceUrl",    f.sourceUrl()  != null ? f.sourceUrl()  : "");
+                obj.addProperty("context",      f.context()    != null ? f.context()    : "");
                 arr.add(obj);
             }
             pw.print(new GsonBuilder().setPrettyPrinting().create().toJson(arr));
@@ -3351,35 +3901,112 @@ public class BulkScanPanel {
         }
     }
 
-    private void exportHtml() {
+    /**
+     * Exports a ZIP file containing one all-in-one HTML report and one CSV file,
+     * both named with a shared YYYYMMDD_HHmmss timestamp.
+     *
+     * ZIP layout:
+     *   secretsifter_report_YYYYMMDD_HHmmss.html  — full HTML report (all findings)
+     *   secretsifter_findings_YYYYMMDD_HHmmss.csv — all findings as CSV
+     */
+    private void exportAllInOneZip() {
         List<SecretFinding> snapshot = collectForExport();
         if (snapshot.isEmpty()) {
             JOptionPane.showMessageDialog(rootPanel, "No findings to export.", "Export", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
+
+        String timestamp = java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String baseName = "secretsifter_report_" + timestamp;
+
         JFileChooser fc = new JFileChooser();
-        fc.setDialogTitle("Export findings as HTML Report");
-        fc.setFileFilter(new FileNameExtensionFilter("HTML files (*.html)", "html"));
-        fc.setSelectedFile(new File("secret-scanner-report.html"));
+        fc.setDialogTitle("Save All-in-one Report ZIP (HTML + CSV)");
+        fc.setFileFilter(new FileNameExtensionFilter("ZIP files (*.zip)", "zip"));
+        fc.setSelectedFile(new File(baseName + ".zip"));
         if (fc.showSaveDialog(rootPanel) != JFileChooser.APPROVE_OPTION) return;
-        File out = ensureExtension(fc.getSelectedFile(), ".html");
+        File out = ensureExtension(fc.getSelectedFile(), ".zip");
 
-        String mode   = (String) tierCombo.getSelectedItem();
+        String mode = (String) tierCombo.getSelectedItem();
 
-        try (FileWriter fw = new FileWriter(out, StandardCharsets.UTF_8)) {
-            fw.write(HtmlReportGenerator.generate(snapshot, null, mode));
-            statusLabel.setText("HTML report saved: " + out.getName());
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                new java.io.BufferedOutputStream(new java.io.FileOutputStream(out)))) {
+
+            // ── HTML entry ──────────────────────────────────────────────────
+            zos.putNextEntry(new java.util.zip.ZipEntry(baseName + ".html"));
+            zos.write(HtmlReportGenerator.generate(snapshot, null, mode)
+                    .getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+
+            // ── Findings CSV entry ──────────────────────────────────────────
+            String findingsCsvName = "secretsifter_findings_" + timestamp + ".csv";
+            zos.putNextEntry(new java.util.zip.ZipEntry(findingsCsvName));
+            StringWriter sw = new StringWriter();
+            writeFindingsCsv(new PrintWriter(sw), snapshot);
+            zos.write(sw.toString().getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+
+            // ── Target Status CSV entry ─────────────────────────────────────
+            // Always included so the user gets per-target reachability / auth status
+            // for every export without having to download it separately.
+            String statusCsvName = "secretsifter_target_status_" + timestamp + ".csv";
+            zos.putNextEntry(new java.util.zip.ZipEntry(statusCsvName));
+            StringWriter swStatus = new StringWriter();
+            int statusRowCount = writeTargetStatusCsv(new PrintWriter(swStatus));
+            zos.write(swStatus.toString().getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+
+            statusLabel.setText("ZIP saved: " + out.getName() + "  (HTML + 2 CSVs)");
             statusLabel.setForeground(new Color(0, 130, 0));
-            // Offer to open
+
             int open = JOptionPane.showConfirmDialog(rootPanel,
-                    "Report saved to:\n" + out.getAbsolutePath() + "\n\nOpen in browser?",
+                    "Report ZIP saved to:\n" + out.getAbsolutePath() + "\n\n"
+                    + "Contents:\n"
+                    + "  • " + baseName + ".html\n"
+                    + "  • " + findingsCsvName + "\n"
+                    + "  • " + statusCsvName + "  (" + statusRowCount + " target row"
+                    + (statusRowCount == 1 ? "" : "s") + ")\n\n"
+                    + "Open containing folder?",
                     "Report Saved", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
             if (open == JOptionPane.YES_OPTION) {
-                try { Desktop.getDesktop().browse(out.toURI()); } catch (Exception ignored) {}
+                try { Desktop.getDesktop().open(out.getParentFile()); } catch (Exception ignored) {}
             }
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(rootPanel,
-                    "Failed to save report: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                    "Failed to save ZIP: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * Writes the per-target reachability/auth status CSV (header + data rows).
+     * Returns the row count so callers can reflect it in the post-export dialog.
+     */
+    private int writeTargetStatusCsv(PrintWriter pw) {
+        List<String[]> snapshot;
+        synchronized (targetStatusExport) {
+            snapshot = new ArrayList<>(targetStatusExport);
+        }
+        pw.println("Status,Target URL,Detail");
+        for (String[] row : snapshot) {
+            pw.printf("\"%s\",\"%s\",\"%s\"%n",
+                    csvEsc(row[0]),   // + / × / ~ / ?
+                    csvEsc(row[1]),   // full target URL
+                    csvEsc(row[2]));  // detail (e.g. "HTTP 200", "Unreachable", "SSO→…")
+        }
+        return snapshot.size();
+    }
+
+    /** Writes the standard findings CSV (header + data rows) to the given writer. */
+    private void writeFindingsCsv(PrintWriter pw, List<SecretFinding> snapshot) {
+        pw.println("Rule ID,Rule Name,Key,Value,Severity,Confidence,Line,Target URL,Source URL,Context");
+        for (SecretFinding f : snapshot) {
+            pw.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\"%n",
+                    csvEsc(f.ruleId()), csvEsc(f.ruleName()),
+                    csvEsc(f.keyName()), csvEsc(f.matchedValue()),
+                    f.severity(), f.confidence(), f.lineNumber(),
+                    csvEsc(f.targetUrl() != null ? f.targetUrl() : ""),
+                    csvEsc(f.sourceUrl()),
+                    csvEsc(f.context() != null ? f.context().replace("\n", " ") : ""));
         }
     }
 
@@ -3416,23 +4043,41 @@ public class BulkScanPanel {
 
         try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
                 new java.io.BufferedOutputStream(new java.io.FileOutputStream(out)))) {
+            // ── Per-domain HTML entries ─────────────────────────────────────
             for (Map.Entry<String, String> entry : domainReports.entrySet()) {
-                // Sanitise domain name for use as a filename
                 String safeName = entry.getKey().replaceAll("[^a-zA-Z0-9._-]", "_");
                 String entryName = safeName + "_secretsifter_" + timestamp + ".html";
                 zos.putNextEntry(new java.util.zip.ZipEntry(entryName));
                 zos.write(entry.getValue().getBytes(StandardCharsets.UTF_8));
                 zos.closeEntry();
             }
+            // ── Combined findings CSV entry (all findings across every domain) ───────
+            String csvName = "secretsifter_findings_" + timestamp + ".csv";
+            zos.putNextEntry(new java.util.zip.ZipEntry(csvName));
+            StringWriter sw = new StringWriter();
+            writeFindingsCsv(new PrintWriter(sw), snapshot);
+            zos.write(sw.toString().getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+
+            // ── Target Status CSV entry ─────────────────────────────────────
+            String statusCsvName = "secretsifter_target_status_" + timestamp + ".csv";
+            zos.putNextEntry(new java.util.zip.ZipEntry(statusCsvName));
+            StringWriter swStatus = new StringWriter();
+            int statusRowCount = writeTargetStatusCsv(new PrintWriter(swStatus));
+            zos.write(swStatus.toString().getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+
             statusLabel.setText("ZIP saved: " + out.getName()
                     + "  (" + domainReports.size() + " domain report"
-                    + (domainReports.size() == 1 ? "" : "s") + ")");
+                    + (domainReports.size() == 1 ? "" : "s") + " + 2 CSVs)");
             statusLabel.setForeground(new Color(0, 130, 0));
 
             int open = JOptionPane.showConfirmDialog(rootPanel,
                     "Per-domain ZIP saved to:\n" + out.getAbsolutePath() + "\n\n"
                     + domainReports.size() + " domain report"
-                    + (domainReports.size() == 1 ? "" : "s") + " generated.\n\n"
+                    + (domainReports.size() == 1 ? "" : "s") + " + " + csvName + "\n"
+                    + "+ " + statusCsvName + "  (" + statusRowCount + " target row"
+                    + (statusRowCount == 1 ? "" : "s") + ")\n\n"
                     + "Open containing folder?",
                     "Reports Saved", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
             if (open == JOptionPane.YES_OPTION) {
@@ -3620,8 +4265,13 @@ public class BulkScanPanel {
                 SecretFinding f   = tableFindings.get(r);
                 String sev  = String.valueOf(tableModel.getValueAt(r, COL_SEV));
                 String conf = String.valueOf(tableModel.getValueAt(r, COL_CONF));
-                result.add(SecretFinding.of(f.ruleId(), f.ruleName(), f.keyName(),
-                        f.matchedValue(), sev, conf, f.lineNumber(), f.context(), f.sourceUrl()));
+                // User-marked NOISE: severity OR confidence == "NOISE" → exclude from exports.
+                // Rows stay visible in the table (gray) so users can unmark, but reports omit them.
+                if ("NOISE".equalsIgnoreCase(sev) || "NOISE".equalsIgnoreCase(conf)) continue;
+                result.add(new SecretFinding(f.ruleId(), f.ruleName(), f.keyName(),
+                        f.matchedValue(), sev, conf, f.lineNumber(), f.context(),
+                        f.sourceUrl(), f.targetUrl() != null ? f.targetUrl() : "",
+                        f.matchOffset()));
             }
         }
         return result;
@@ -3655,24 +4305,33 @@ public class BulkScanPanel {
             Object display = value;
             if (col == COL_VAL && maskValues && value != null && !value.toString().isEmpty())
                 display = "••••••••••••";
-            else if (col == COL_URL && maskUrls && value != null && !value.toString().isEmpty())
+            else if ((col == COL_URL || col == COL_TARGET_URL) && maskUrls && value != null && !value.toString().isEmpty())
                 display = "••••••••••••";
             Component c = super.getTableCellRendererComponent(
                     table, display, selected, focused, row, col);
+            int modelRow = table.convertRowIndexToModel(row);
+            Object sevVal  = tableModel.getValueAt(modelRow, COL_SEV);
+            Object confVal = tableModel.getValueAt(modelRow, COL_CONF);
+            boolean userMarkedNoise = ("NOISE".equalsIgnoreCase(String.valueOf(sevVal))
+                    || "NOISE".equalsIgnoreCase(String.valueOf(confVal)));
             if (!selected) {
-                int modelRow = table.convertRowIndexToModel(row);
-                Object sev = tableModel.getValueAt(modelRow, COL_SEV);
-                Color bg = sev != null
-                        ? SEV_BG.getOrDefault(sev.toString().toUpperCase(), Color.WHITE)
-                        : Color.WHITE;
+                Color bg;
+                if (userMarkedNoise) {
+                    bg = new Color(220, 220, 220); // light gray — user-marked NOISE, excluded from reports
+                } else {
+                    bg = sevVal != null
+                            ? SEV_BG.getOrDefault(sevVal.toString().toUpperCase(), Color.WHITE)
+                            : Color.WHITE;
+                }
                 c.setBackground(bg);
             }
-            if (col == COL_URL || col == 8) {
+            Color fg = selected ? Color.WHITE : (userMarkedNoise ? new Color(120, 120, 120) : Color.BLACK);
+            if (col == COL_URL || col == COL_TARGET_URL || col == 9) {
                 setFont(getFont().deriveFont(Font.PLAIN, 11f));
-                setForeground(selected ? Color.WHITE : Color.BLACK);
+                setForeground(fg);
             } else {
                 setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-                setForeground(selected ? Color.WHITE : Color.BLACK);
+                setForeground(fg);
             }
             return c;
         }

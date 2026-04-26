@@ -24,14 +24,38 @@ public record SecretFinding(
         String confidence,  // "CERTAIN", "FIRM", "TENTATIVE"
         int    lineNumber,
         String context,
-        String sourceUrl
+        String sourceUrl,
+        String targetUrl,   // original input target from bulk scan; "" for proxy findings
+        int    matchOffset  // byte offset of the match within the response body; -1 if unknown.
+                            // Used in dedup so that minified bundles (where every match shares
+                            // lineNumber=1 or one large line) still produce one finding per match.
 ) {
-    /** Convenience factory */
+    /** Convenience factory — targetUrl defaults to "" and offset to -1 for backward compatibility. */
     public static SecretFinding of(String ruleId, String ruleName,
             String key, String value, String severity, String confidence,
             int line, String context, String url) {
         return new SecretFinding(ruleId, ruleName, key, value,
-                severity, confidence, line, context, url);
+                severity, confidence, line, context, url, "", -1);
+    }
+
+    /** Factory that captures byte offset of the match for per-occurrence dedup. */
+    public static SecretFinding of(String ruleId, String ruleName,
+            String key, String value, String severity, String confidence,
+            int line, String context, String url, int offset) {
+        return new SecretFinding(ruleId, ruleName, key, value,
+                severity, confidence, line, context, url, "", offset);
+    }
+
+    /** Returns a copy of this finding with severity overridden to the given value. */
+    public SecretFinding withSeverity(String newSeverity) {
+        return new SecretFinding(ruleId, ruleName, keyName, matchedValue,
+                newSeverity, confidence, lineNumber, context, sourceUrl, targetUrl, matchOffset);
+    }
+
+    /** Returns a copy of this finding with targetUrl set to the given origin target. */
+    public SecretFinding withTargetUrl(String origin) {
+        return new SecretFinding(ruleId, ruleName, keyName, matchedValue,
+                severity, confidence, lineNumber, context, sourceUrl, origin, matchOffset);
     }
 
     /**
@@ -89,7 +113,7 @@ public record SecretFinding(
         HttpRequestResponse markedRr = addResponseMarkers(requestResponse, List.of(matchedValue));
 
         return AuditIssue.auditIssue(
-                "[SecretSifter] " + ruleName,
+                "[SecretSifter] Secrets / Credentials",
                 detail,
                 background,
                 issueBaseUrl,
@@ -117,6 +141,20 @@ public record SecretFinding(
      */
     public static AuditIssue toGroupedAuditIssue(List<SecretFinding> group,
                                                   HttpRequestResponse rr) {
+        return toGroupedAuditIssue(group, rr, null);
+    }
+
+    /**
+     * @param issueUrlOverride when non-null, used as the AuditIssue URL instead of
+     *        the finding's sourceUrl.  Pass the scan target's root URL so that issues
+     *        for directly-fetched JS/JSON files (not in Burp's proxy history) are filed
+     *        under a URL that IS in the site map tree, preventing them from being hidden
+     *        by Burp's "Hiding not found items" filter.  The actual source file URL is
+     *        appended to the issue detail text for traceability.
+     */
+    public static AuditIssue toGroupedAuditIssue(List<SecretFinding> group,
+                                                  HttpRequestResponse rr,
+                                                  String issueUrlOverride) {
         if (group == null || group.isEmpty())
             throw new IllegalArgumentException("finding group must not be empty");
         SecretFinding first = group.get(0);
@@ -133,7 +171,7 @@ public record SecretFinding(
               .append("</i> found:</b><br><br>");
         detail.append("<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\">")
               .append("<tr>")
-              .append("<td width=\"40\" align=\"center\"><b>&nbsp;#&nbsp;</b></td>")
+              .append("<td width=\"20\" align=\"center\"><b>&bull;</b></td>")
               .append("<td><b>Key&nbsp;/&nbsp;Field</b></td>")
               .append("<td><b>Matched&nbsp;Value</b></td>")
               .append("</tr>");
@@ -142,7 +180,7 @@ public record SecretFinding(
             String dv = f.matchedValue().length() > 80
                     ? f.matchedValue().substring(0, 77) + "..." : f.matchedValue();
             detail.append("<tr>")
-                  .append("<td width=\"40\" align=\"center\">&nbsp;").append(i + 1).append("&nbsp;</td>")
+                  .append("<td width=\"20\" align=\"center\">&bull;</td>")
                   .append("<td>").append(escapeHtml(f.keyName())).append("</td>")
                   .append("<td>").append(escapeHtml(dv)).append("</td>")
                   .append("</tr>");
@@ -161,21 +199,37 @@ public record SecretFinding(
                 "Use server-side environment variables and never embed live credentials " +
                 "in front-end assets or API responses.";
 
-        // Clean URL — strip #fragment and display suffixes
-        String issueBaseUrl = first.sourceUrl();
-        if (issueBaseUrl != null) {
-            int hashIdx = issueBaseUrl.indexOf('#');
-            if (hashIdx >= 0) issueBaseUrl = issueBaseUrl.substring(0, hashIdx);
-            if (issueBaseUrl.endsWith(" [HTML]"))
-                issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 7);
-            if (issueBaseUrl.endsWith(" [JS]"))
-                issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 5);
-            if (issueBaseUrl.endsWith(" [JSON]"))
-                issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 7);
-            if (issueBaseUrl.endsWith(" [XML]"))
-                issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 6);
-            if (issueBaseUrl.endsWith(" [REQ-HEADERS]"))
-                issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 14);
+        // AuditIssue URL: use override when provided (target root), else source URL.
+        String issueBaseUrl;
+        if (issueUrlOverride != null && !issueUrlOverride.isEmpty()) {
+            issueBaseUrl = issueUrlOverride;
+            // Append the actual JS/JSON file URL so the advisory is traceable.
+            if (first.sourceUrl() != null) {
+                String cleanSrc = first.sourceUrl()
+                        .replaceAll(" \\[(HTML|JS|JSON|XML|REQ-HEADERS|REQ-BODY)\\]", "");
+                int h = cleanSrc.indexOf('#');
+                if (h >= 0) cleanSrc = cleanSrc.substring(0, h);
+                if (!cleanSrc.equals(issueUrlOverride))
+                    detail.append("<br><b>Source&nbsp;file:</b>&nbsp;")
+                          .append(escapeHtml(cleanSrc));
+            }
+        } else {
+            // Clean URL — strip #fragment and display suffixes
+            issueBaseUrl = first.sourceUrl();
+            if (issueBaseUrl != null) {
+                int hashIdx = issueBaseUrl.indexOf('#');
+                if (hashIdx >= 0) issueBaseUrl = issueBaseUrl.substring(0, hashIdx);
+                if (issueBaseUrl.endsWith(" [HTML]"))
+                    issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 7);
+                if (issueBaseUrl.endsWith(" [JS]"))
+                    issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 5);
+                if (issueBaseUrl.endsWith(" [JSON]"))
+                    issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 7);
+                if (issueBaseUrl.endsWith(" [XML]"))
+                    issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 6);
+                if (issueBaseUrl.endsWith(" [REQ-HEADERS]"))
+                    issueBaseUrl = issueBaseUrl.substring(0, issueBaseUrl.length() - 14);
+            }
         }
 
         // Collect all matched values and add response markers so Burp highlights
@@ -184,8 +238,24 @@ public record SecretFinding(
         for (SecretFinding f : group) vals.add(f.matchedValue());
         HttpRequestResponse markedRr = addResponseMarkers(rr, vals);
 
+        // Passing null to a varargs HttpRequestResponse... causes Burp to NPE internally.
+        // Omit the argument entirely when there is no associated request/response.
+        if (markedRr != null) {
+            return AuditIssue.auditIssue(
+                    "[SecretSifter] Secrets / Credentials",
+                    detail.toString(),
+                    background,
+                    issueBaseUrl,
+                    maxSev,
+                    maxConf,
+                    remediationDetail,
+                    null,
+                    maxSev,
+                    markedRr
+            );
+        }
         return AuditIssue.auditIssue(
-                "[SecretSifter] " + first.ruleName(),
+                "[SecretSifter] Secrets / Credentials",
                 detail.toString(),
                 background,
                 issueBaseUrl,
@@ -193,8 +263,7 @@ public record SecretFinding(
                 maxConf,
                 remediationDetail,
                 null,
-                maxSev,
-                markedRr
+                maxSev
         );
     }
 
@@ -213,7 +282,7 @@ public record SecretFinding(
      */
     private static HttpRequestResponse addResponseMarkers(HttpRequestResponse rr,
                                                            List<String> values) {
-        if (rr == null || rr.response() == null) return rr;
+        if (rr == null || rr.response() == null) return null;
         try {
             // Use the full raw response (status-line + headers + body) as bytes.
             // withResponseMarkers() offsets are into this byte array.

@@ -27,7 +27,10 @@ public class ScanSettings {
     private static final String KEY_SCAN_REQUESTS  = "ss.scan_requests";  // scan req headers/body
     private static final String KEY_KEY_BLOCKLIST  = "ss.keyblocklist";   // newline-separated key name suppression list
     private static final String KEY_KEY_ALLOWLIST  = "ss.keyallowlist";   // newline-separated key name force-include list
-    private static final String KEY_ALLOW_INSECURE_SSL = "ss.allow_insecure_ssl";
+    private static final String KEY_ALLOW_INSECURE_SSL   = "ss.allow_insecure_ssl";
+    private static final String KEY_CUSTOM_RULES         = "ss.customrules";        // newline-separated rule lines
+    private static final String KEY_CUSTOM_RULES_ENABLED = "ss.customrules_enabled";
+    private static final String KEY_CUSTOM_RULES_ONLY    = "ss.customrules_only";   // raw mode: skip built-in scanners + FP gates
 
     // ---- fields ----
     private volatile boolean   enabled              = true;
@@ -36,6 +39,11 @@ public class ScanSettings {
     private volatile boolean   piiEnabled           = true;
     private volatile boolean   scanRequestsEnabled  = true;
     private volatile boolean   allowInsecureSsl     = false;
+    private volatile boolean   customRulesEnabled   = true;
+    // Raw mode: when true, the proxy and bulk-scan paths run ONLY user-supplied custom rules
+    // and bypass the FP gates (isProbableSecretValue, placeholder check, webpack-hash filter).
+    // Allowlist/blocklist/CDN blocklist still apply. Burp's audit (SecretScanCheck) is unaffected.
+    private volatile boolean   customRulesOnly      = false;
 
     // Key name blocklist — findings whose matched key name contains any entry are suppressed.
     // Defaults cover common app storage-key constants that are never credentials.
@@ -48,6 +56,11 @@ public class ScanSettings {
     // Key name allowlist — findings whose matched key name contains any entry are always reported,
     // bypassing isProbableSecretValue() checks. Empty by default; users populate per engagement.
     private final List<String> keyAllowlist = new ArrayList<>();
+
+    // Custom rules — user-defined patterns layered on top of built-ins.
+    // Each entry is a raw rule line: "RuleName | regex | severity"
+    // Parsed at scan time by SecretScanner. Empty by default.
+    private final List<String> customRules = new ArrayList<>();
 
     private final List<String> cdnBlocklist = new ArrayList<>(Arrays.asList(
             // JS/CSS CDNs — static asset delivery, no secrets expected
@@ -69,7 +82,22 @@ public class ScanSettings {
             // Add them manually here if you want to skip those hosts.
             "akamaiedge.net",
             // Device fingerprinting / bot-detection CDNs — no app secrets, lots of noise
-            "online-metrix.net"         // ThreatMetrix / LexisNexis Risk Solutions
+            "online-metrix.net",        // ThreatMetrix / LexisNexis Risk Solutions
+            // SSO / identity providers — these are third-party auth pages, not app assets
+            "microsoftonline.com",      // Microsoft Entra / Azure AD login
+            "msauth.net",               // Microsoft auth CDN (aadcdn.msauth.net etc.)
+            "msftauth.net",             // Microsoft alt auth domain
+            "live.com",                 // Microsoft Live login
+            // Adobe marketing cloud — DTM/Launch tag managers and analytics CDNs
+            "adobedtm.com",             // Adobe DTM / Launch (assets.adobedtm.com etc.)
+            "omtrdc.net",               // Adobe Analytics / Target
+            "demdex.net",               // Adobe Audience Manager
+            // General analytics / RUM CDNs
+            "google-analytics.com",
+            "nr-data.net",              // New Relic browser agent
+            // Customer experience / feedback analytics
+            "medallia.com",             // Medallia digital experience (analytics-fe.*)
+            "medallia.eu"               // Medallia EU data-residency endpoint
     ));
 
     // =========================================================================
@@ -93,6 +121,11 @@ public class ScanSettings {
 
     public boolean isAllowInsecureSsl()                  { return allowInsecureSsl; }
     public void    setAllowInsecureSsl(boolean b)        { allowInsecureSsl = b; }
+
+    public boolean isCustomRulesEnabled()                { return customRulesEnabled; }
+    public void    setCustomRulesEnabled(boolean b)      { customRulesEnabled = b; }
+    public boolean isCustomRulesOnly()                   { return customRulesOnly; }
+    public void    setCustomRulesOnly(boolean b)         { customRulesOnly = b; }
 
     public synchronized List<String> getCdnBlocklist() {
         return new ArrayList<>(cdnBlocklist);
@@ -129,6 +162,15 @@ public class ScanSettings {
     public synchronized void setKeyAllowlist(List<String> list) {
         keyAllowlist.clear();
         if (list != null) keyAllowlist.addAll(list);
+    }
+
+    public synchronized List<String> getCustomRules() {
+        return new ArrayList<>(customRules);
+    }
+
+    public synchronized void setCustomRules(List<String> list) {
+        customRules.clear();
+        if (list != null) customRules.addAll(list);
     }
 
     /** Returns true if the key name contains any entry in the key allowlist (case-insensitive). */
@@ -191,6 +233,9 @@ public class ScanSettings {
             prefs.setString(KEY_CDNLIST,              String.join("\n", getCdnBlocklist()));
             prefs.setString(KEY_KEY_BLOCKLIST,    String.join("\n", getKeyBlocklist()));
             prefs.setString(KEY_KEY_ALLOWLIST,    String.join("\n", getKeyAllowlist()));
+            prefs.setString(KEY_CUSTOM_RULES,         String.join("\n", getCustomRules()));
+            prefs.setBoolean(KEY_CUSTOM_RULES_ENABLED, customRulesEnabled);
+            prefs.setBoolean(KEY_CUSTOM_RULES_ONLY,    customRulesOnly);
         } catch (Exception ignored) {
             // Preferences not critical — continue silently
         }
@@ -229,7 +274,11 @@ public class ScanSettings {
                     String trimmed = line.trim();
                     if (!trimmed.isEmpty()) loaded.add(trimmed);
                 }
-                setCdnBlocklist(loaded);
+                // Merge with built-in defaults: ensures entries added in updated JARs
+                // are never silently dropped when old preferences are loaded on upgrade.
+                java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(getCdnBlocklist());
+                merged.addAll(loaded);
+                setCdnBlocklist(new ArrayList<>(merged));
             }
 
             String keyBlockStr = prefs.getString(KEY_KEY_BLOCKLIST);
@@ -252,6 +301,22 @@ public class ScanSettings {
                 setKeyAllowlist(loaded);
             }
 
+            Boolean customRulesEn = prefs.getBoolean(KEY_CUSTOM_RULES_ENABLED);
+            if (customRulesEn != null) customRulesEnabled = customRulesEn;
+
+            Boolean customRulesOnlyEn = prefs.getBoolean(KEY_CUSTOM_RULES_ONLY);
+            if (customRulesOnlyEn != null) customRulesOnly = customRulesOnlyEn;
+
+            String customRulesStr = prefs.getString(KEY_CUSTOM_RULES);
+            if (customRulesStr != null && !customRulesStr.isBlank()) {
+                List<String> loaded = new ArrayList<>();
+                for (String line : customRulesStr.split("\n")) {
+                    String trimmed = line.trim();
+                    if (!trimmed.isEmpty()) loaded.add(trimmed);
+                }
+                setCustomRules(loaded);
+            }
+
         } catch (Exception ignored) {}
     }
 
@@ -262,6 +327,8 @@ public class ScanSettings {
         piiEnabled           = true;
         scanRequestsEnabled  = true;
         allowInsecureSsl     = false;
+        customRulesEnabled   = true;
+        customRulesOnly      = false;
         synchronized (this) {
             keyBlocklist.clear();
             keyBlocklist.addAll(Arrays.asList(
@@ -270,6 +337,7 @@ public class ScanSettings {
                     "NEXT_PUBLIC_", "REACT_APP_PUBLIC_", "VUE_APP_PUBLIC_"
             ));
             keyAllowlist.clear();
+            customRules.clear();
             cdnBlocklist.clear();
             cdnBlocklist.addAll(Arrays.asList(
                     "cdnjs", "jsdelivr", "unpkg", "ajax.googleapis.com",
@@ -285,7 +353,18 @@ public class ScanSettings {
                     "platform.linkedin.com", "connect.facebook.net",
                     "static.klaviyo.com", "static.ads-twitter.com",
                     "akamaiedge.net",
-                    "online-metrix.net"
+                    "online-metrix.net",
+                    "microsoftonline.com",
+                    "msauth.net",
+                    "msftauth.net",
+                    "live.com",
+                    "adobedtm.com",
+                    "omtrdc.net",
+                    "demdex.net",
+                    "google-analytics.com",
+                    "nr-data.net",
+                    "medallia.com",
+                    "medallia.eu"
             ));
         }
     }

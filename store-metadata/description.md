@@ -6,7 +6,7 @@ Detects exposed API keys, credentials, and PII in HTTP traffic. 100+ vendor toke
 
 ---
 
-## Full description (≤ 1000 characters, plain text for BApp Store form)
+## Full description (plain text for BApp Store form)
 
 SecretSifter detects exposed secrets, API keys, credentials, and PII in HTTP traffic passing through Burp Suite.
 
@@ -21,6 +21,8 @@ SecretSifter detects exposed secrets, API keys, credentials, and PII in HTTP tra
 - Database connection strings with embedded credentials
 
 **Bulk Scan tab:** paste or import a list of URLs, follow script-src and webpack chunks, optionally launch Chrome headless for dynamic JS capture. Export findings as CSV or interactive HTML report (all-in-one or per-domain ZIP).
+
+**Custom regex rules:** Import your own `Rule Name | regex | severity` lines via Settings → Custom Rules. Optional raw mode skips built-in scanners and FP filters for pure pattern matching.
 
 **False positive reduction:** CDN blocklist, 60+ noise key filter, JWT suppression, UUID rejection, Angular/Vue directive filter, configurable key blocklist and allowlist.
 

@@ -18,11 +18,11 @@ Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP
 
 | HTML Report | Settings Tab |
 |---|---|
-| ![HTML Report](store-metadata/screenshots/03_html_report.png) | ![Settings Tab](store-metadata/screenshots/04_settings_tab.png) |
+| ![HTML Report](store-metadata/screenshots/03_html_report.png) | ![Settings — Scanner](store-metadata/screenshots/04_settings_scanner.png) |
 
-| Right-click Rescan |
-|---|
-| ![Context Menu Rescan](store-metadata/screenshots/05_context_menu_rescan.png) |
+| Right-click Rescan | Custom Rules — raw-mode toggle |
+|---|---|
+| ![Context Menu Rescan](store-metadata/screenshots/05_context_menu_rescan.png) | ![Custom Rules](store-metadata/screenshots/06_custom_rules.png) |
 
 ---
 
@@ -40,10 +40,30 @@ Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP
 | **HAR import** | Scan responses from a `.har` file directly — no live fetch needed (useful for auth-walled or offline targets) |
 | **Headless Browse** | Optionally launch Chrome/Chromium headless through Burp proxy to capture dynamic XHR/Fetch calls |
 | **Scope Monitor** | Capture passive proxy findings for watched hosts and route them into the Bulk Scan results table |
-| **HTML reports** | Per-scan all-in-one HTML report; per-domain ZIP (one file per hostname); CSV export |
+| **HTML reports** | Per-scan all-in-one HTML report (HTML + findings CSV + target-status CSV); per-domain ZIP (one file per hostname + same two CSVs) |
 | **Scan tiers** | FAST / LIGHT / FULL — trade speed vs. coverage |
 | **Key name blocklist / allowlist** | Suppress FP-prone key patterns or force-report specific key names regardless of entropy |
 | **FP mitigations** | CDN blocklist, 60+ noise key filter, Angular/Vue directive filter, JWT suppression, UUID rejection |
+| **Custom regex rules** | Import `Rule Name \| regex \| severity` lines via Settings. Optional **Custom rules only (raw)** toggle skips built-in scanners + FP filters and reports every regex match — useful for live investigation of a known token format |
+| **NOISE marking** | Set Severity *or* Confidence to `NOISE` on any finding row to gray it out and exclude it from HTML / CSV / ZIP exports while keeping it visible in the table for unmarking |
+| **Per-occurrence dedup** | Same key+value at different file offsets (or different lines) reported as separate findings — minified bundles with N matches produce N rows, not one |
+
+---
+
+## Network Communications
+
+SecretSifter does not make any outbound network connections by default. All findings are
+detected locally by Burp's proxy and passive scan engine. Network activity occurs only when
+the user explicitly triggers it.
+
+| User action | Destination | Data sent |
+|---|---|---|
+| **Bulk Scan** tab → *Start* | The user's configured Burp proxy → user-pasted target URLs | The HTTP requests Burp would normally make for those URLs |
+| **Bulk Scan** → *Headless Browse* enabled | Local Chrome/Chromium process launched as child process; traffic routed through the user's Burp proxy | Standard browser navigation to the user-pasted URLs |
+
+**No telemetry:** The extension does not phone home, send usage statistics, check for
+updates, or perform any background network activity. The only outbound network calls are
+the ones listed above, all of which are user-initiated.
 
 ---
 
@@ -62,13 +82,13 @@ Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP
 
 ### 1. Download the JAR
 
-Download `secretsifter-1.0.0.jar` from the Releases page, or build it yourself (see below).
+Download `secretsifter-bapp-1.0.1.jar` from the Releases page, or build it yourself (see below).
 
 ### 2. Load into Burp
 
 1. Open Burp Suite → **Extensions** tab → **Installed** → **Add**
 2. Set **Extension type**: Java
-3. Browse to `secretsifter-1.0.0.jar`
+3. Browse to `secretsifter-bapp-1.0.1.jar`
 4. Click **Next** — the extension loads and a **Secret Sifter** tab appears in the main tab bar
 
 ---
@@ -124,6 +144,8 @@ Expands to all site-map entries for the selected host(s). Optionally save an HTM
 | CDN Blocklist | Hostnames to skip (one per line; pre-populated with common CDN/analytics domains) |
 | Key Name Blocklist | Substring patterns — matching key names are suppressed (e.g. `STATE_KEY_`, `NEXT_PUBLIC_`) |
 | Key Name Allowlist | Substring patterns — matching key names are always reported regardless of entropy |
+| Custom Rules | Paste/import `Rule Name \| regex \| severity` lines (one per line). Toggle *Enable custom rules* to run them alongside built-in rules |
+| Custom rules only (raw) | When ON, skip built-in scanners and FP filters — only your regex rules fire. Allow/blocklist/CDN list still apply. Default: OFF |
 
 ---
 
@@ -152,7 +174,7 @@ cd secretsifter-burp
 ./gradlew shadowJar
 ```
 
-Output: `build/libs/secretsifter-1.0.0.jar` (~430 KB)
+Output: `build/libs/secretsifter-bapp-1.0.1.jar` (~554 KB)
 
 ### Run tests
 
@@ -187,7 +209,7 @@ User-configurable key name blocklist and allowlist are available in the Settings
 ### Extension does not load
 - Verify Burp Suite version is 2024.7 or later
 - Check the **Extensions → Output** tab for error messages
-- Confirm you are loading the **shadow JAR** (`secretsifter-1.0.0.jar`), not the plain compile output
+- Confirm you are loading the **shadow JAR** (`secretsifter-bapp-1.0.1.jar`), not the plain compile output
 
 ### No findings appear for a known secret
 - Check **Settings → Scan Tier** — switch to FULL for maximum coverage

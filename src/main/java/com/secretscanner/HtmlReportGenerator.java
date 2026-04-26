@@ -53,8 +53,13 @@ public final class HtmlReportGenerator {
             String dispVal   = maskValue(f.matchedValue());
             String ctxRaw    = f.context() != null ? trunc(f.context(), 120) : "";
             String ctx       = maskContext(ctxRaw, f.matchedValue());
-            String urlFull   = f.sourceUrl() != null ? f.sourceUrl() : "";
-            String domain    = extractDomain(urlFull);
+            String urlFull    = f.sourceUrl() != null ? f.sourceUrl() : "";
+            String targetFull = f.targetUrl() != null ? f.targetUrl() : "";
+            // Clean href: strip content-type labels and #inline-js / #json-script fragments
+            // so the link navigates to the real URL, not to " [HTML]#inline-js" which 404s.
+            String urlHref    = urlFull.replaceAll(" \\[(?:JSON|JS|HTML|XML|REQ-HEADERS|REQ-BODY)\\]", "")
+                                       .replaceAll("#(?:inline-js|json-script|inline-json)$", "");
+            String domain     = extractDomain(urlFull);
 
             // ── Table row ──────────────────────────────────────────────────
             rows.append("<tr data-sev=\"").append(sev)
@@ -73,13 +78,23 @@ public final class HtmlReportGenerator {
             rows.append("  <td class=\"val-cell\" data-raw=\"").append(rawEsc)
                 .append("\" data-masked=\"").append(maskedEsc)
                 .append("\"><code>").append(maskedEsc).append("</code></td>\n");
-            // Full URL as clickable link — display starts masked; href always full
+            // Source URL as clickable link — display starts masked; href always full
             String urlMasked = maskUrl(urlFull);
             rows.append("  <td class=\"url-cell\" data-raw=\"").append(esc(urlFull))
                 .append("\" data-masked=\"").append(esc(urlMasked)).append("\">")
-                .append("<a href=\"").append(esc(urlFull))
+                .append("<a href=\"").append(esc(urlHref))
                 .append("\" target=\"_blank\" title=\"").append(esc(urlFull)).append("\">")
                 .append(esc(urlMasked)).append("</a></td>\n");
+            // Target URL — the original input target from the bulk scan list
+            String targetMasked = maskUrl(targetFull);
+            rows.append("  <td class=\"url-cell\" data-raw=\"").append(esc(targetFull))
+                .append("\" data-masked=\"").append(esc(targetMasked)).append("\">");
+            if (!targetFull.isEmpty()) {
+                rows.append("<a href=\"").append(esc(targetFull))
+                    .append("\" target=\"_blank\" title=\"").append(esc(targetFull)).append("\">")
+                    .append(esc(targetMasked)).append("</a>");
+            }
+            rows.append("</td>\n");
             rows.append("  <td>").append(f.lineNumber()).append("</td>\n");
             rows.append("  <td class=\"ctx-cell\" data-raw=\"").append(esc(ctxRaw))
                 .append("\" data-masked=\"").append(esc(ctx))
@@ -95,6 +110,7 @@ public final class HtmlReportGenerator {
                 .append("\"keyName\":\"").append(jsonEsc(f.keyName())).append("\",")
                 .append("\"matchedValue\":\"").append(jsonEsc(f.matchedValue())).append("\",")
                 .append("\"domain\":\"").append(jsonEsc(domain)).append("\",")
+                .append("\"targetUrl\":\"").append(jsonEsc(targetFull)).append("\",")
                 .append("\"sourceUrl\":\"").append(jsonEsc(urlFull)).append("\",")
                 .append("\"lineNumber\":").append(f.lineNumber()).append(",")
                 .append("\"context\":\"").append(jsonEsc(f.context())).append("\"")
@@ -131,7 +147,9 @@ public final class HtmlReportGenerator {
         // Group by base domain preserving insertion order
         Map<String, List<SecretFinding>> grouped = new LinkedHashMap<>();
         for (SecretFinding f : findings) {
-            String domain = extractBaseDomain(f.sourceUrl());
+            String domain = (f.targetUrl() != null && !f.targetUrl().isBlank())
+                    ? extractBaseDomain(f.targetUrl())
+                    : extractBaseDomain(f.sourceUrl());
             grouped.computeIfAbsent(domain, k -> new ArrayList<>()).add(f);
         }
         // Generate one HTML per domain group
@@ -154,11 +172,15 @@ public final class HtmlReportGenerator {
      */
     private static String extractBaseDomain(String url) {
         if (url == null || url.isBlank()) return "unknown_domain";
-        // Strip display suffixes added by BulkScanPanel
+        // Strip display suffixes and fragments added by BulkScanPanel
         String clean = url;
         int hash = clean.indexOf('#');
         if (hash >= 0) clean = clean.substring(0, hash);
-        if (clean.endsWith(" [HTML]")) clean = clean.substring(0, clean.length() - 7);
+        clean = clean.replaceAll(" \\[(?:JSON|JS|HTML|XML|REQ-HEADERS|REQ-BODY)\\]", "").trim();
+        // Ensure a scheme is present — bare hostnames (user input without https://) fail URL parsing
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+            clean = "https://" + clean;
+        }
         String host;
         try {
             host = new java.net.URL(clean).getHost();
@@ -228,7 +250,10 @@ public final class HtmlReportGenerator {
         String clean = url;
         int hash = clean.indexOf('#');
         if (hash >= 0) clean = clean.substring(0, hash);
-        if (clean.endsWith(" [HTML]")) clean = clean.substring(0, clean.length() - 7);
+        clean = clean.replaceAll(" \\[(?:JSON|JS|HTML|XML|REQ-HEADERS|REQ-BODY)\\]", "").trim();
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+            clean = "https://" + clean;
+        }
         try {
             return new java.net.URL(clean).getHost();
         } catch (Exception e) {
@@ -354,7 +379,8 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:3px;
              align-items:flex-start;justify-content:center;padding-top:80px}
 .rem-overlay.open{display:flex}
 .rem-modal{background:#fff;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.28);
-           width:640px;max-width:90vw;overflow:hidden;animation:slideDown .2s ease}
+           width:640px;max-width:90vw;overflow:hidden;animation:slideDown .2s ease;
+           display:flex;flex-direction:column;max-height:80vh}
 @keyframes slideDown{from{opacity:0;transform:translateY(-18px)}to{opacity:1;transform:translateY(0)}}
 .rem-modal-hdr{display:flex;align-items:center;gap:10px;background:#fff8f0;
                border-bottom:1px solid #ffe0b0;padding:14px 18px}
@@ -362,11 +388,16 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:3px;
 .rem-close{background:none;border:none;font-size:20px;color:#b45309;cursor:pointer;
            line-height:1;padding:0 2px}
 .rem-close:hover{color:#7c2d12}
-.rem-modal-body{padding:18px 22px 20px}
-.rem-modal-body ul{padding-left:18px;display:flex;flex-direction:column;gap:10px}
+.rem-modal-body{padding:18px 22px 20px;overflow-y:auto;flex:1}
+.rem-modal-body ul{padding-left:18px;display:flex;flex-direction:column;gap:8px}
+.rem-modal-body ul ul{margin-top:6px;gap:5px}
 .rem-modal-body li{font-size:12.5px;line-height:1.55;color:#444}
 .rem-modal-body li strong{color:#1a1a2e}
 .rem-modal-note{margin-top:14px;font-size:11px;color:#999;border-top:1px solid #f0f0f0;padding-top:10px}
+.rem-section-title{font-size:13px;font-weight:700;margin:0 0 8px;padding:6px 10px;border-radius:5px}
+.rem-section-title.urgent{background:#fef2f2;color:#b91c1c;border-left:3px solid #ef4444}
+.rem-section-title.general{background:#f0f9ff;color:#0369a1;border-left:3px solid #38bdf8;margin-top:16px}
+.rem-section{margin-bottom:4px}
 
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 .footer{text-align:center;padding:20px;font-size:11px;color:#aaa}
@@ -400,13 +431,54 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:3px;
       <button class="rem-close" onclick="closeRem()" title="Close">✕</button>
     </div>
     <div class="rem-modal-body">
-      <ul>
-        <li><strong>Rotate or revoke all identified credentials immediately</strong> — treat every exposed secret as compromised, even if no misuse has been observed yet.</li>
-        <li><strong>Remove secrets from client-accessible assets</strong> — JavaScript files, HTML source, and API responses are readable by any user. Move credentials to server-side environment variables or a secrets manager (e.g. AWS Secrets Manager, HashiCorp Vault).</li>
-        <li><strong>Audit git history</strong> — run <code>git log -S &lt;secret&gt;</code> to check whether the credential was ever committed. If so, rotate it and consider the entire history compromised.</li>
-        <li><strong>Review how the secret was exposed</strong> — hardcoded value, SSR state blob, API response leakage, or webpack bundle inclusion each require a different fix at the source.</li>
-        <li><strong>Notify affected service owners</strong> — check platform audit logs for any unauthorised access that may have already occurred using the exposed credential.</li>
-      </ul>
+
+      <!-- Section 1: Immediate Actions -->
+      <div class="rem-section">
+        <div class="rem-section-title urgent">&#x26A0;&#xFE0F; 1. Immediate Actions Required</div>
+        <ul>
+          <li><strong>Rotate Exposed Azure Keys:</strong>
+            <ul>
+              <li>Identify all Azure secrets (AppId, AppKey, Resource, Subscription Key, Secret Key, etc.) currently exposed in the frontend code.</li>
+              <li>Immediately rotate (invalidate and replace) these secrets to prevent unauthorized access.</li>
+              <li>Store all new secrets securely in <strong>Azure Key Vault</strong> or an equivalent secure secrets management service.</li>
+              <li>Update all application configurations to reference the secrets from Azure Key Vault, not from code or environment variables exposed to the frontend.</li>
+            </ul>
+          </li>
+          <li><strong>Implement Backend For Frontend (BFF) Architecture:</strong>
+            <ul>
+              <li>Refactor the application so that the frontend never directly accesses or stores secrets.</li>
+              <li>All authentication flows and API calls that require secrets or sensitive credentials must be handled by a secure backend service (the BFF).</li>
+              <li>The BFF should return only the necessary data to the frontend, not the secrets or tokens themselves.</li>
+              <li>The frontend should only interact with the BFF, which will:
+                <ul>
+                  <li>Authenticate users as needed.</li>
+                  <li>Generate and manage authorization tokens securely.</li>
+                  <li>Call downstream APIs on behalf of the frontend, using the secrets stored securely in the backend.</li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+          <li><strong>Hardcoded Passwords:</strong>
+            <ul>
+              <li>Remove all hardcoded passwords (user creds or third party creds) on all frontend sources (JS files, HTML view-sources, API responses, etc.)</li>
+              <li>Disable the exposed accounts — these should be assumed compromised.</li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Section 2: General Remediation -->
+      <div class="rem-section">
+        <div class="rem-section-title general">&#x1F6E1;&#xFE0F; 2. General Remediation</div>
+        <ul>
+          <li><strong>Rotate or revoke all identified credentials immediately</strong> — treat every exposed secret as compromised, even if no misuse has been observed yet.</li>
+          <li><strong>Remove secrets from client-accessible assets</strong> — JavaScript files, HTML source, and API responses are readable by any user. Move credentials to server-side environment variables or a secrets manager (e.g. AWS Secrets Manager, HashiCorp Vault).</li>
+          <li><strong>Audit git history</strong> — run <code>git log -S &lt;secret&gt;</code> to check whether the credential was ever committed. If so, rotate it and consider the entire history compromised.</li>
+          <li><strong>Review how the secret was exposed</strong> — hardcoded value, SSR state blob, API response leakage, or webpack bundle inclusion each require a different fix at the source.</li>
+          <li><strong>Notify affected service owners</strong> — check platform audit logs for any unauthorised access that may have already occurred using the exposed credential.</li>
+        </ul>
+      </div>
+
       <div class="rem-modal-note">This guidance applies to all findings in this report. Rotate credentials before closing any associated tickets.</div>
     </div>
   </div>
@@ -451,8 +523,9 @@ code{background:#f4f4f4;padding:1px 5px;border-radius:3px;
   <th onclick="sortBy(3)">Rule ID</th>
   <th onclick="sortBy(4)">Key</th>
   <th>Value</th>
-  <th onclick="sortBy(6)">URL</th>
-  <th onclick="sortBy(7)">Line</th>
+  <th onclick="sortBy(6)">Source URL</th>
+  <th onclick="sortBy(7)">Target URL</th>
+  <th onclick="sortBy(8)">Line</th>
   <th>Context</th>
 </tr>
 </thead>
@@ -594,7 +667,7 @@ function exportJSON() {
 
 function exportCSV() {
   var data   = JSON.parse(document.getElementById('findings-data').textContent);
-  var fields = ['severity','confidence','ruleId','ruleName','keyName','matchedValue','domain','sourceUrl','lineNumber','context'];
+  var fields = ['severity','confidence','ruleId','ruleName','keyName','matchedValue','domain','targetUrl','sourceUrl','lineNumber','context'];
   var lines  = [fields.join(',')];
   data.forEach(function(f) {
     lines.push(fields.map(function(k) {

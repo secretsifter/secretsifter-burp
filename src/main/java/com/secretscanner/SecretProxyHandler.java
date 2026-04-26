@@ -2,6 +2,7 @@ package com.secretscanner;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
+import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.proxy.http.ProxyResponseHandler;
 import burp.api.montoya.proxy.http.InterceptedResponse;
 import burp.api.montoya.proxy.http.ProxyResponseReceivedAction;
@@ -52,9 +53,10 @@ public class SecretProxyHandler implements ProxyResponseHandler {
         this.scanner  = scanner;
         this.settings = settings;
         this.api      = api;
-        // 2 daemon threads: enough to drain the proxy queue without saturating CPU.
-        // Daemon threads are automatically killed when Burp exits / extension unloads.
-        this.executor = Executors.newFixedThreadPool(2, r -> {
+        // Cached thread pool: spawns threads on demand so bulk-scan traffic (hundreds of
+        // requests routed through Burp proxy) never delays findings from browser-visited URLs.
+        // Idle threads expire after 60 s; all threads are daemon so they die with Burp.
+        this.executor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "SecretSifter-ProxyScanner");
             t.setDaemon(true);
             return t;
@@ -86,17 +88,26 @@ public class SecretProxyHandler implements ProxyResponseHandler {
         }
 
         // Eagerly extract the response body and Content-Type on the proxy thread, BEFORE
-        // returning continueWith().  The Montoya API's httpRequestResponse() may hold a
-        // reference to the live InterceptedResponse rather than deep-copying its body bytes;
-        // if Burp recycles the proxy buffer after continueWith() returns, a background-thread
-        // call to response.bodyToString() would read an empty string and the response body
-        // would never be scanned.  Extracting here guarantees the bytes are captured.
+        // returning continueWith().  Burp may recycle the InterceptedResponse buffer once
+        // continueWith() is returned; a background-thread call to response.bodyToString()
+        // on a recycled buffer returns an empty string, and passing a stale rr to
+        // api.siteMap().add() causes Burp to silently drop the AuditIssue (or NPE internally),
+        // permanently losing the finding (the deduplicator already claimed the key).
         final String responseBody = interceptedResponse.bodyToString();
         final String responseCt   = interceptedResponse.headerValue("Content-Type");
 
-        // Snapshot the full request/response pair for request-header scanning and AuditIssue
-        // construction.  continueWith() must not be called until after this line.
-        HttpRequestResponse rr = HttpRequestResponse.httpRequestResponse(req, interceptedResponse);
+        // Deep-copy the full raw response bytes (status-line + headers + body) NOW,
+        // before continueWith() is returned, so the background thread holds an immutable
+        // snapshot that is safe to read after the proxy buffer is recycled.
+        HttpResponse deepResponse;
+        try {
+            deepResponse = HttpResponse.httpResponse(interceptedResponse.toByteArray());
+        } catch (Exception e) {
+            deepResponse = null;
+        }
+        final HttpRequestResponse rr = deepResponse != null
+                ? HttpRequestResponse.httpRequestResponse(req, deepResponse)
+                : HttpRequestResponse.httpRequestResponse(req, interceptedResponse);
 
         // Submit scan to background thread — proxy pipeline is unblocked immediately.
         executor.submit(() -> {
@@ -107,14 +118,17 @@ public class SecretProxyHandler implements ProxyResponseHandler {
                     Map<String, List<SecretFinding>> grouped = new LinkedHashMap<>();
                     for (SecretFinding f : findings)
                         grouped.computeIfAbsent(f.ruleName(), k -> new ArrayList<>()).add(f);
-                    for (List<SecretFinding> group : grouped.values())
-                        if (SitemapDeduplicator.shouldAdd(group))
-                            api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rr));
+                    for (List<SecretFinding> group : grouped.values()) {
+                        try {
+                            if (SitemapDeduplicator.shouldAddProxy(group))
+                                api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rr));
+                        } catch (Exception ex) {
+                            api.logging().logToError("[SecretSifter] siteMap.add failed for group: " + ex);
+                        }
+                    }
 
                     // Route to Bulk Scan panel when a session is active
                     if (ScopeMonitor.isActive()) {
-                        // Use rr.request() (immutable snapshot), not req (may be recycled by Burp
-                        // after continueWith() returns on the proxy thread).
                         String referer  = rr.request().headerValue("Referer");
                         String origin   = rr.request().headerValue("Origin");
                         String routeUrl = resolveRouteUrl(url, referer, origin);
@@ -140,17 +154,6 @@ public class SecretProxyHandler implements ProxyResponseHandler {
         return ProxyResponseToBeSentAction.continueWith(interceptedResponse);
     }
 
-    /**
-     * Returns the URL to route findings to, or null if this request doesn't
-     * belong to any watched target.
-     *
-     * Direct URL matching is always applied.  Cross-origin matching via Referer/Origin
-     * is enabled only when ScopeMonitor.isCrossOriginFollow() is true (user opt-in via
-     * the "Cross-origin APIs" checkbox).  When enabled, API calls fired by a watched
-     * host's JavaScript (e.g. api.example.com called from app.example.com) are captured;
-     * the trade-off is that unrelated third-party services reached from the same page
-     * (e.g. analytics, CDN) may also appear in the panel.
-     */
     private static String resolveRouteUrl(String url, String referer, String origin) {
         if (ScopeMonitor.isWatched(url)) return url;
         if (ScopeMonitor.isCrossOriginFollow()) {

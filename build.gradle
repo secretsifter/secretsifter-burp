@@ -3,8 +3,8 @@ plugins {
     id 'com.gradleup.shadow' version '8.3.5'
 }
 
-group = 'com.secretscanner'
-version = '1.0.0'
+group   = 'com.secretscanner'
+version = '1.0.1'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -36,10 +36,18 @@ jar {
     enabled = false
 }
 
+// BApp Store JAR — single clean build, no MCP server
+// Output: secretsifter-bapp-<version>.jar
+//
+// Reproducible build: zero file timestamps and stable file order so PortSwigger reviewers
+// can clone the repo, run `./gradlew shadowJar`, and produce a byte-identical JAR for
+// SHA-256 verification against the submitted artifact.
 shadowJar {
-    archiveBaseName.set('secretsifter')
-    archiveClassifier.set('')  // output: secretsifter-1.0.0.jar (fat JAR)
+    archiveBaseName.set('secretsifter-bapp')
+    archiveClassifier.set('')
     mergeServiceFiles()
+    preserveFileTimestamps = false
+    reproducibleFileOrder  = true
     manifest {
         attributes 'Extension-Class': 'com.secretscanner.SecretScannerExtension'
     }

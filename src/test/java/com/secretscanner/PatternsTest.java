@@ -167,10 +167,12 @@ class PatternsTest {
 
     @Nested @DisplayName("PEM private key header")
     class Pem {
-        @Test void rsa_match()    { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN RSA PRIVATE KEY-----"); }
-        @Test void ec_match()     { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN EC PRIVATE KEY-----"); }
-        @Test void bare_match()   { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN PRIVATE KEY-----"); }
-        @Test void openssh_match(){ assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN OPENSSH PRIVATE KEY-----"); }
+        // PEM_PRIVATE_KEY requires header + newline + ≥1 base64 line (to avoid matching stub comments).
+        private static final String KEY_BODY = "\nMIIEpAIBAAKCAQEA1234567890ABCDEF\n";
+        @Test void rsa_match()    { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN RSA PRIVATE KEY-----"    + KEY_BODY); }
+        @Test void ec_match()     { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN EC PRIVATE KEY-----"     + KEY_BODY); }
+        @Test void bare_match()   { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN PRIVATE KEY-----"        + KEY_BODY); }
+        @Test void openssh_match(){ assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN OPENSSH PRIVATE KEY-----" + KEY_BODY); }
         @Test void pub_noMatch()  { assertNoMatch(Patterns.PEM_PRIVATE_KEY, "-----BEGIN PUBLIC KEY-----"); }
     }
 

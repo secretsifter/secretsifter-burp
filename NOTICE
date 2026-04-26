@@ -1,8 +1,13 @@
 Secret Sifter — Burp Suite Extension
 Copyright 2024-2026 Hemanth Gorijala
 
-This product is licensed under the Elastic License 2.0
-(see LICENSE for the full text).
+This product is licensed under the MIT License (see LICENSE for the full text).
+
+---
+
+This product bundles Gson 2.10.1 — Apache License 2.0
+(https://github.com/google/gson). Gson is used by the response body walker
+to parse JSON values without a schema.
 
 ---
 

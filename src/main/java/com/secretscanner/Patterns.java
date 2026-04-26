@@ -37,14 +37,16 @@ public final class Patterns {
     public static final Pattern SLACK_APP            = Pattern.compile("\\bxapp-\\d+-[A-Za-z0-9]{24,}\\b");
     public static final Pattern SLACK_CONFIG         = Pattern.compile("\\bxoxe\\.[A-Za-z0-9\\-_]{140,}\\b");
 
-    public static final Pattern STRIPE_SECRET_LIVE   = Pattern.compile("\\bsk_live_[A-Za-z0-9]{24,99}\\b");
-    public static final Pattern STRIPE_SECRET_TEST   = Pattern.compile("\\bsk_test_[A-Za-z0-9]{24,99}\\b");
-    public static final Pattern STRIPE_RESTRICTED    = Pattern.compile("\\brk_live_[A-Za-z0-9]{24,99}\\b");
+    public static final Pattern STRIPE_SECRET_LIVE   = Pattern.compile("\\bsk_live_[A-Za-z0-9]{24,200}\\b");
+    public static final Pattern STRIPE_SECRET_TEST   = Pattern.compile("\\bsk_test_[A-Za-z0-9]{24,200}\\b");
+    public static final Pattern STRIPE_RESTRICTED    = Pattern.compile("\\brk_live_[A-Za-z0-9]{24,200}\\b");
 
     public static final Pattern SENDGRID             = Pattern.compile(
             "\\bSG\\.[A-Za-z0-9\\-_]{22}\\.[A-Za-z0-9\\-_]{43}\\b");
 
-    public static final Pattern TWILIO_SID           = Pattern.compile("\\bAC[a-f0-9]{32}\\b");
+    public static final Pattern TWILIO_SID           = Pattern.compile(
+            // AC=Account SID, SK=API Key SID, FO=Flex Flow SID, FW=Flex Workspace SID, AT=Access Token SID
+            "\\b(?:AC|SK|FO|FW|AT)[a-f0-9]{32}\\b");
 
     public static final Pattern OPENAI_KEY           = Pattern.compile("\\bsk-[A-Za-z0-9]{48}\\b");
     public static final Pattern OPENAI_PROJECT       = Pattern.compile(
@@ -61,7 +63,7 @@ public final class Patterns {
     public static final Pattern MAILCHIMP            = Pattern.compile("\\b[a-f0-9]{32}-us\\d{1,2}\\b");
     public static final Pattern DATABRICKS           = Pattern.compile("\\bdapi[a-f0-9]{32}\\b");
 
-    public static final Pattern GOOGLE_KEY           = Pattern.compile("AIza[0-9A-Za-z_\\-]{35}");
+    public static final Pattern GOOGLE_KEY           = Pattern.compile("AIza[0-9A-Za-z_\\-]{10,}");
     // Covers all IAM principal key ID prefixes: AKIA (user), ASIA (session), AROA (role), AIDA (group)
     public static final Pattern AWS_ACCESS_KEY       = Pattern.compile("\\b(?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}\\b");
     // Mapbox access tokens are always JWTs — their payload starts with "eyJ" (base64-encoded "{").
@@ -69,7 +71,9 @@ public final class Patterns {
     public static final Pattern MAPBOX               = Pattern.compile("(?:pk|sk)\\.eyJ[A-Za-z0-9_\\-]{20,}");
 
     public static final Pattern PEM_PRIVATE_KEY      = Pattern.compile(
-            "-----BEGIN\\s+(?:RSA\\s+|EC\\s+|DSA\\s+|OPENSSH\\s+)?PRIVATE\\s+KEY-----",
+            "-----BEGIN\\s+(?:RSA\\s+|EC\\s+|DSA\\s+|OPENSSH\\s+|ENCRYPTED\\s+)?PRIVATE\\s+KEY-----" +
+            "(?:\\r?\\n|\\\\n)" +
+            "(?:[A-Za-z0-9+/=]{10,76}(?:\\r?\\n|\\\\n))+",
             Pattern.CASE_INSENSITIVE);
 
     // =========================================================================
@@ -104,9 +108,23 @@ public final class Patterns {
     public static final Pattern WOOCOMMERCE_CK       = Pattern.compile("\\bck_[a-z0-9]{40}\\b");
     public static final Pattern WOOCOMMERCE_CS       = Pattern.compile("\\bcs_[a-z0-9]{40}\\b");
 
-    // Discord bot token (M/N/O prefix + two dot-separated base62url segments)
+    // Discord bot token — three dot-separated base62url segments:
+    //   seg1: 23-28 chars (base64url-encoded user ID — no longer limited to M/N/O;
+    //         Discord snowflake IDs have grown beyond the range that encodes to those chars)
+    //   seg2: 6-7 chars (base64url-encoded token timestamp)
+    //   seg3: exactly 27 chars (HMAC digest)
+    // Also covers MFA tokens: mfa. + 20+ base62url chars.
+    // First char of seg1 restricted to [A-Za-z0-9] (not _ or -) since base64url-encoded
+    // integers always start with an alphanumeric character.
     public static final Pattern DISCORD_BOT_TOKEN    = Pattern.compile(
-            "\\b[MNO][A-Za-z0-9]{23,25}\\.[A-Za-z0-9_\\-]{6}\\.[A-Za-z0-9_\\-]{27,38}\\b");
+            // (?=\\S*[a-z]) rejects all-uppercase matches (e.g. JS config keys like
+            // CLIENTSYSTEMINFORMATION.OPTIONS.VALIDSPOUSELASTNAMEEDIT0000 which are structurally
+            // valid but never real tokens — Discord tokens are base64url and always mixed-case).
+            // (?=\\S*[0-9]) additionally rejects all-alphabetic dotted-path identifiers such as
+            // ConversationTranslatorConfig.strings.permissionDeniedParticipant which are
+            // structurally valid (28.7.27 chars) but contain no digits — real Discord tokens
+            // always have at least one digit in every segment.
+            "\\b(?=\\S*[a-z])(?=\\S*[0-9])(?:mfa\\.[A-Za-z0-9_\\-]{20,}|[A-Za-z0-9][A-Za-z0-9_\\-]{22,27}\\.[A-Za-z0-9_\\-]{6,7}\\.[A-Za-z0-9_\\-]{27})\\b");
 
     // Discord incoming webhook URL
     public static final Pattern DISCORD_WEBHOOK      = Pattern.compile(
@@ -272,8 +290,11 @@ public final class Patterns {
     // Square Access Token — "sq0atp-" prefix + 22+ chars
     public static final Pattern SQUARE_ACCESS_TOKEN  = Pattern.compile("\\bsq0atp-[A-Za-z0-9\\-_]{22,}\\b");
 
-    // Stripe Publishable Key (Live) — informational: confirms live Stripe integration
-    public static final Pattern STRIPE_PK_LIVE       = Pattern.compile("\\bpk_live_[A-Za-z0-9]{24,99}\\b");
+    // Stripe Publishable Key (Live) — low severity: Stripe designs this to be public,
+    // but exposes Stripe account identity and enables card-validity probing.
+    public static final Pattern STRIPE_PK_LIVE       = Pattern.compile("\\bpk_live_[A-Za-z0-9]{24,200}\\b");
+    // Stripe Publishable Key (Test) — informational: test environment, zero financial impact
+    public static final Pattern STRIPE_PK_TEST       = Pattern.compile("\\bpk_test_[A-Za-z0-9]{24,200}\\b");
 
     // Cloudinary API URL — contains API key + secret embedded in URL
     public static final Pattern CLOUDINARY_URL       = Pattern.compile(
@@ -323,6 +344,74 @@ public final class Patterns {
             "InstrumentationKey=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
             Pattern.CASE_INSENSITIVE);
 
+    // =========================================================================
+    // AZURE SERVICE CONNECTION STRINGS
+    //
+    // All patterns below anchor on a Microsoft-owned hostname suffix that is
+    // unique to a single Azure service.  No random string will ever contain
+    // "azure-devices.net", "servicebus.windows.net", etc.
+    //
+    // Safety notes applied to every pattern:
+    //   (1) Field values are bounded by [^;]{1,N} — semicolons are the field
+    //       separator in all Azure connection strings.  This prevents the regex
+    //       engine from scanning across field boundaries on large JS files and
+    //       eliminates catastrophic backtracking.
+    //   (2) The key/password capture group uses [A-Za-z0-9+/=\\]{20,200}.
+    //       '\\' is included because JSON serialisers escape '/' as '\/' so
+    //       a Base64 key embedded in JSON text may contain literal backslashes.
+    //   (3) Every pattern uses Pattern.CASE_INSENSITIVE — Azure-generated
+    //       connection strings are case-insensitive by specification.
+    //   (4) Protocol chars (://, :443/) are skipped with [^;]{0,15} rather
+    //       than explicit slash matching to handle both raw and JSON-escaped
+    //       forms without adding regex complexity.
+    // =========================================================================
+
+    // IoT Hub: HostName=X.azure-devices.net;SharedAccessKeyName=Y;SharedAccessKey=<base64>
+    public static final Pattern AZURE_IOT_HUB_CONN     = Pattern.compile(
+            "HostName=[^;]{1,100}\\.azure-devices\\.net[^;]{0,20}" +
+            ";SharedAccessKeyName=[^;]{1,100}" +
+            ";SharedAccessKey=([A-Za-z0-9+/=\\\\]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
+    // Event Hub / Service Bus: Endpoint=sb://X.servicebus.windows.net/;SharedAccessKeyName=Y;SharedAccessKey=<base64>
+    // [^;]{0,15} skips the "sb://" or "sb:\/" part without explicit slash handling
+    public static final Pattern AZURE_EVENTHUB_CONN    = Pattern.compile(
+            "Endpoint=sb:[^;]{0,15}\\.servicebus\\.windows\\.net[^;]{0,30}" +
+            ";SharedAccessKeyName=[^;]{1,100}" +
+            ";SharedAccessKey=([A-Za-z0-9+/=\\\\]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
+    // Cosmos DB: AccountEndpoint=https://X.documents.azure.com:443/;AccountKey=<base64>
+    public static final Pattern AZURE_COSMOS_CONN      = Pattern.compile(
+            "AccountEndpoint=https?:[^;]{0,15}\\.documents\\.azure\\.com[^;]{0,30}" +
+            ";AccountKey=([A-Za-z0-9+/=\\\\]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
+    // Azure Cache for Redis: X.redis.cache.windows.net:6380,password=<key>,ssl=True
+    // Comma-delimited format — [^,] prevents crossing field boundaries
+    public static final Pattern AZURE_REDIS_CONN       = Pattern.compile(
+            "[a-zA-Z0-9\\-]{1,63}\\.redis\\.cache\\.windows\\.net[^,]{0,20}" +
+            ",password=([^,\\s\"'\\r\\n]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
+    // Azure Communication Services: endpoint=https://X.communication.azure.com/;accesskey=<base64>
+    public static final Pattern AZURE_ACS_CONN         = Pattern.compile(
+            "endpoint=https?:[^;]{0,15}\\.communication\\.azure\\.com[^;]{0,30}" +
+            ";accesskey=([A-Za-z0-9+/=\\\\]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
+    // Azure Web PubSub: Endpoint=https://X.webpubsub.azure.com;AccessKey=<base64>;Version=1.0
+    public static final Pattern AZURE_WEBPUBSUB_CONN   = Pattern.compile(
+            "Endpoint=https?:[^;]{0,15}\\.webpubsub\\.azure\\.com[^;]{0,30}" +
+            ";AccessKey=([A-Za-z0-9+/=\\\\]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
+    // Azure SignalR: Endpoint=https://X.service.signalr.net;AccessKey=<base64>;Version=1.0
+    public static final Pattern AZURE_SIGNALR_CONN     = Pattern.compile(
+            "Endpoint=https?:[^;]{0,15}\\.service\\.signalr\\.net[^;]{0,30}" +
+            ";AccessKey=([A-Za-z0-9+/=\\\\]{20,200})",
+            Pattern.CASE_INSENSITIVE);
+
     // GCP service account e-mail (client_email field in service account JSON)
     public static final Pattern GCP_SA_CLIENT_EMAIL  = Pattern.compile(
             "\\b[a-z0-9\\-]+@[a-z0-9\\-]+\\.iam\\.gserviceaccount\\.com\\b");
@@ -344,6 +433,14 @@ public final class Patterns {
     public static final Pattern BRAINTREE_TOKEN      = Pattern.compile(
             "\\baccess_token\\$(?:production|sandbox)\\$[a-f0-9]{16}\\$[a-f0-9]{32}\\b");
 
+    // Braintree client/tokenization key — sandbox_<8>_<12–32> or production_<8>_<12–32>
+    // These are the client-side keys passed to braintree.client.create().
+    // Sandbox keys are LOW (test environment); production keys are MEDIUM (client-exposed but real).
+    public static final Pattern BRAINTREE_CLIENT_PROD    = Pattern.compile(
+            "\\bproduction_[a-z0-9]{6,12}_[a-z0-9]{12,32}\\b");
+    public static final Pattern BRAINTREE_CLIENT_SANDBOX = Pattern.compile(
+            "\\bsandbox_[a-z0-9]{6,12}_[a-z0-9]{12,32}\\b");
+
     // Klaviyo private API key — pk_ prefix + 34 hex chars (MEDIUM: short prefix has moderate FP risk)
     public static final Pattern KLAVIYO_API_KEY      = Pattern.compile("\\bpk_[a-f0-9]{34}\\b");
 
@@ -359,6 +456,10 @@ public final class Patterns {
 
     // GCP OAuth2 short-lived access token — ya29. prefix (returned after OAuth2 token exchange)
     public static final Pattern GCP_OAUTH2_TOKEN        = Pattern.compile("\\bya29\\.[A-Za-z0-9_\\-]{30,}\\b");
+
+    // GCP OAuth2 client secret — issued by Google Cloud Console for OAuth2 apps.
+    // GOCSPX- prefix + 28 base62url chars.  Distinct from the ya29. access token.
+    public static final Pattern GCP_CLIENT_SECRET       = Pattern.compile("\\bGOCSPX-[A-Za-z0-9_\\-]{28}\\b");
 
     // Twitch stream key — live_{8-12 digit accountId}_{30-36 alnum}
     public static final Pattern TWITCH_STREAM_KEY       = Pattern.compile("\\blive_\\d{8,12}_[A-Za-z0-9]{30,36}\\b");
@@ -385,6 +486,68 @@ public final class Patterns {
     // bcrypt password hash — indicates hashed credentials exposed in response
     public static final Pattern BCRYPT_HASH             = Pattern.compile("\\$2[abxy]\\$\\d{1,2}\\$[./A-Za-z0-9]{53}");
 
+    // btoa("clientId:secret") — OAuth Basic Auth credential pair hardcoded in frontend JS.
+    // Both sides must be ≥8 chars; allows alphanumeric plus hyphen, underscore, dot, +, /
+    // (covers UUID-format client IDs, base64url secrets, etc.).  The btoa("…") wrapper
+    // plus colon separator provide strong anchoring — URL false-positives are impossible
+    // because URLs contain "://" which would fail the single-colon split.
+    // e.g. btoa("xnaxZVSMszwY4Taj5iYWOptnDsMSY6up:NQBpjpn47uKgoljE")
+    // e.g. btoa("a1b2c3d4-e5f6-7890-abcd-ef1234567890:MyS3cr3t_Key.value")
+    public static final Pattern BTOA_CREDS = Pattern.compile(
+            "\\bbtoa\\(\"([A-Za-z0-9\\-_.+/]{8,200}):([A-Za-z0-9\\-_.+/]{8,200})\"\\)");
+
+    // CryptoJS / sjcl AES call — captures both the ciphertext and the passphrase.
+    //   CryptoJS.AES.decrypt("ciphertext", "passphrase")
+    //   l.AES.decrypt("ciphertext", "passphrase")
+    // group(1) = ciphertext (string literal, 10+ chars) — decryptable with the passphrase
+    // group(2) = passphrase (6+ chars) — the symmetric key hardcoded in the JS
+    // When the first arg is a variable (not a string literal) only the passphrase is captured
+    // via CRYPTOJS_AES_PASSPHRASE_ONLY below.
+    public static final Pattern CRYPTOJS_AES_FULL = Pattern.compile(
+            "\\.AES\\.(?:decrypt|encrypt)\\s*\\(\\s*\"([^\"]{10,})\"\\s*,\\s*\"([^\"]{6,})\"");
+
+    // Fallback: first arg is a variable, only capture passphrase (group 1).
+    public static final Pattern CRYPTOJS_AES_PASSPHRASE_ONLY = Pattern.compile(
+            "\\.AES\\.(?:decrypt|encrypt)\\s*\\(\\s*[A-Za-z0-9_.]+\\s*,\\s*\"([^\"]{6,})\"");
+
+    // CryptoJS HMAC with hardcoded key — group(1) = key string literal.
+    // Covers: CryptoJS.HmacSHA256(data, "KEY"), CryptoJS.HmacSHA512(data, "KEY"), etc.
+    public static final Pattern CRYPTOJS_HMAC = Pattern.compile(
+            "(?i)CryptoJS\\.Hmac(?:SHA1|SHA256|SHA512|MD5|RIPEMD160)\\s*\\([^,\"']{0,60},\\s*[\"']([^\"']{6,})[\"']");
+
+    // CryptoJS .enc.Hex.parse("hexkey") / .enc.Base64.parse("b64key") — group(1) = key material.
+    // Used to pass raw hex/base64 keys to CryptoJS.AES.encrypt/decrypt instead of a passphrase.
+    public static final Pattern CRYPTOJS_ENC_PARSE = Pattern.compile(
+            "(?i)CryptoJS\\.enc\\.(?:Hex|Base64|Utf8)\\.parse\\s*\\(\\s*[\"']([^\"']{8,})[\"']");
+
+    // jwt.sign / jsonwebtoken.sign hardcoded secret — group(1) = signing secret string literal.
+    // Covers: jwt.sign(payload, "SECRET"), jsonwebtoken.sign(payload, "SECRET", {algorithm:...})
+    // Requires the second argument to be a string literal (not a variable reference).
+    // Min 8 chars to avoid matching empty / placeholder secrets.
+    public static final Pattern JWT_SIGN_SECRET = Pattern.compile(
+            "(?i)(?:jsonwebtoken|jwt)\\.sign\\s*\\([^,]{1,200},\\s*[\"']([^\"']{8,})[\"']");
+
+    // process.env.X || "fallback" — group(1) = fallback value when env var is absent.
+    // This is the most common way secrets leak into client bundles: developers set a "safe
+    // default" that becomes the real secret in non-configured environments.
+    // Covers: process.env.SECRET_KEY || "value", process.env.API_KEY ?? "value"
+    public static final Pattern ENV_FALLBACK = Pattern.compile(
+            "(?i)process\\.env\\.[A-Za-z0-9_]{2,60}\\s*(?:\\|\\||\\?\\?)\\s*[\"']([^\"']{8,})[\"']");
+
+    // Node.js crypto.createCipheriv / createDecipheriv hardcoded key.
+    // group(1) = key literal (string or Buffer.from("...") argument).
+    // Only fires when the key argument is a string literal.
+    public static final Pattern CRYPTO_CIPHERIV = Pattern.compile(
+            "(?i)crypto\\.create(?:Cipher|Decipher)iv\\s*\\([^,\"']{0,40},\\s*" +
+            "(?:Buffer\\.from\\s*\\(\\s*)?[\"']([^\"']{8,})[\"']");
+
+    // FlexMonster pivot table license key.
+    // Format: XXXX-XXXXXX-DDDDDD(-XXXXXX){4,} where X = uppercase alphanum, D = digit.
+    // The third segment being pure digits is the distinguishing feature vs. random hex.
+    // Example: Z7ER-XJDC0M-252462-0T4P69-5R3S6O-5X6I4Q-4Y5B1Q-0M4M1O-2M102B-6U4S0E-255U1M-6R2E2S
+    public static final Pattern FLEXMONSTER_LICENSE_KEY = Pattern.compile(
+            "\\b[A-Z0-9]{4}-[A-Z0-9]{6}-[0-9]{6}(?:-[A-Z0-9]{6}){4,}\\b");
+
     // =========================================================================
     // GENERIC PATTERNS
     // =========================================================================
@@ -393,6 +556,17 @@ public final class Patterns {
     // e.g. prevents matching password=""care"` from React env-var blocks in minified JSON
     public static final Pattern URL_WITH_CREDS       = Pattern.compile(
             "(?i)\\bhttps?://([^/\\s:@\"'{}]+):([^/\\s@\"'{}]+)@([A-Za-z0-9.\\-]+)");
+
+    // Credentials embedded as URL query parameters — ?username=X&password=Y or ?user=X&pass=Y
+    // Catches hardcoded credentials in config files and commented-out URLs.
+    public static final Pattern URL_QUERY_CREDS      = Pattern.compile(
+            "(?i)\\bhttps?://[^\\s\"'<>{}]+?[?&](?:password|passwd|pwd|pass|pword)=([^&\\s\"'<>{}#]{4,})");
+
+    // Same as above but works on relative-path and HTML-attribute-embedded URLs that have no
+    // https:// prefix (e.g. <frame src="index.php?password=..."> or &amp;-separated params).
+    // Minimum value length 20 avoids FPs on short IDs/codes.
+    public static final Pattern BARE_QUERY_CREDS     = Pattern.compile(
+            "(?i)(?:&amp;|[?&])(?:password|passwd|pwd|pass|pword)=([^&\\s\"'<>{}#]{20,})");
 
     public static final Pattern DB_CONN_STRING       = Pattern.compile(
             "(?i)(mongodb(?:\\+srv)?|postgresql|postgres|mysql|mssql|sqlserver|" +
@@ -448,7 +622,13 @@ public final class Patterns {
             "template|style|font|icon|filterby|weekdays|months|rfc1123|locale|" +
             "format|date|time|color|colour|width|height|size|margin|padding)$" +
             // Keys whose suffix indicates UI strings, validation patterns, policy text, or hostnames — never credentials
-            "|(?i)^.+(?:msg|errormsg|regex|pattern|policy|caption|hint|domain|url|uri|host|path|endpoint|baseurl|homepage|website)$");
+            "|(?i)^.+(?:msg|errormsg|regex|pattern|policy|caption|hint|domain|url|uri|host|path|endpoint|baseurl|homepage|website)$" +
+            // Keys whose suffix indicates a type discriminator, error label, or state enum — never credential holders
+            // e.g., CredentialType, TokenError, KeyState, SecretKind
+            "|(?i)^.+(?:type|error|state|kind)$" +
+            // Angular/webpack bundle chunk manifest keys: file-path-derived keys mapping to build content hashes.
+            // e.g. src_app_modules_news-resource-center_newsresourcecenter_module_ts
+            "|(?i)^.+[_-](?:module|component|service|directive|pipe|guard|resolver|interceptor|factory|effect|reducer)[_-](?:ts|js)$");
 
     public static final Pattern REAL_SECRET_KEYNAME  = Pattern.compile(
             "(?i)(api[_\\-]?key|apikey|app[_\\-]?key|appkey|app[_\\-]?secret|appsecret|" +
@@ -475,7 +655,9 @@ public final class Patterns {
             "slack[_\\-]?(?:token|key)|" +                          // slack_token as variable name
             "(?:db|database|admin|root)[_\\-]?(?:password|pass(?:word)?)|" + // db_password, admin_password
             "(?:app|service)[_\\-]?password|" +
-            "(?:smtp|mail|imap|pop3|ftp|sftp|ldap)[_\\-]?(?:user(?:name)?|pass(?:word)?|login|auth(?:entication)?))"); // SMTPUser, smtp_password, mailUsername, ldap_auth
+            "(?:smtp|mail|imap|pop3|ftp|sftp|ldap)[_\\-]?(?:user(?:name)?|pass(?:word)?|login|auth(?:entication)?)|" +
+            "cbk[_\\-]?(?:app[_\\-]?id|appid|safe[_\\-]?id|safeid|key|url|object[_\\-]?id)|" + // CyberArk AIM config keys (cbkAppId, cbkSafeId, cbkKey, cbkUrl)
+            "cyberark[_\\-]?(?:app[_\\-]?id|safe|key|url|credential|token|password|account))"); // CyberArk generic keys
 
     public static final Pattern BLOCKCHAIN_HASH_KEY  = Pattern.compile(
             "(?i)\\b(tx(?:id|hash)|txn?|transaction|block(?:hash|id)|eth|wallet|address)\\b");
@@ -507,7 +689,23 @@ public final class Patterns {
             "aws[_\\-]?secret|ssh[_\\-]?key|password|passwd|secret|" +
             "encrypt(?:ion)?[_\\-]?(?:key|secret)|decrypt(?:ion)?[_\\-]?(?:key|secret)|" +
             "encrypted[_\\-]?env|crypto[_\\-]?(?:js)?[_\\-]?(?:secret)?[_\\-]?key|" +
-            "apim[_\\-]?subscription[_\\-]?key)\\b");
+            "apim[_\\-]?subscription[_\\-]?key|" +
+            // Standalone crypto operation keywords: AES/HMAC/cipher function calls and library
+            // references indicate the surrounding code performs cryptographic operations —
+            // nearby high-entropy hex values are likely key material, not analytics IDs or hashes.
+            "AES|HMAC|CryptoJS|\\bcipher\\b|\\bdecipher\\b|crypto\\.subtle|SubtleCrypto)\\b");
+
+    /**
+     * Crypto operation keyword pattern — used for hex-guard exceptions in secret scanners.
+     * A wider ±200-char window is used compared to ENTROPY_CONTEXT_KW's ±80 chars, since
+     * minified JS bundles may separate a hex key literal from its encryption call site by
+     * 100+ characters.
+     * Matches: encrypt/decrypt function names, AES/HMAC cipher names, CryptoJS library calls,
+     * Web Crypto API references, and cipher/decipher patterns.
+     */
+    public static final Pattern CRYPTO_OP_PATTERN = Pattern.compile(
+            "(?i)\\b(encrypt|decrypt|\\bAES\\b|\\bHMAC\\b|CryptoJS|cipher|decipher|" +
+            "crypto\\.subtle|SubtleCrypto|hmacSHA|pbkdf2|bcrypt|scrypt)\\b");
 
     /**
      * Extracts the last key name immediately before a value assignment
@@ -534,10 +732,15 @@ public final class Patterns {
             "apiendpoint", "api_endpoint", "endpoint", "baseurl", "base_url",
             "serviceurl", "service_url", "callback_url", "callbackurl",
             "redirect_url", "redirecturl", "redirecturi", "redirect_uri",
-            "clientid", "client_id", "tenantid", "tenant_id",
+            "client_id", "tenant_id",
             "csrf", "csrftoken", "xsrf", "xsrftoken",
             "x-csrf-token", "x-xsrf-token", "xsrf-token", "csrf-token",
             "_csrf", "csrfmiddlewaretoken", "__requestverificationtoken",
+            // OAuth2 / Azure AD flow params — values are resource URIs or GUIDs.
+            // "resource" bare key is intentionally NOT suppressed here so that GUID values
+            // (e.g. Resource:"286cd9a2-...") are reported as INFORMATION (Azure recon).
+            // "resource_id" / "resourceid" intentionally NOT suppressed — GUID gate in scanGenericKV
+            // handles them via isAzureCredentialKey() so Resource_ID:"025ad63a-..." is reported.
             "anonymous_id", "anonymousid", "anon_id", "device_id", "deviceid",
             "telemetryservertoken", "telemetry_server_token",
             "productid", "product_id", "categoryid", "category_id",
@@ -577,7 +780,13 @@ public final class Patterns {
             "databaseurl", "database_url",
             // Application Insights SDK constants — format strings / SDK identifiers, not secrets
             "requestcontextappidformat", "requestcontexttargetkey", "requestidheader",
-            "sdkextension", "sdkversion", "instrumentationkey"
+            "sdkextension", "sdkversion", "instrumentationkey",
+            // Session identifiers — ephemeral per-user values, not reusable credentials
+            "sessionid", "session_id", "jsessionid", "phpsessid", "asp.net_sessionid",
+            "sessid", "sess_id", "sessionstate", "session_state",
+            // Organization identifiers — public client-side IDs, never secrets
+            // e.g. Adobe orgId: "48B564D85E5D2CDD0A495CF8@AdobeOrg"
+            "orgid", "org_id"
     );
 
     // =========================================================================
@@ -758,9 +967,11 @@ public final class Patterns {
                     "(?i)aws[_\\-]?secret[_\\-]?(?:access[_\\-]?)?key[^\"'<>\\n]{0,30}[=:]\\s*[\"']?([A-Za-z0-9+/]{40})[\"']?"),
                     1, "aws_secret_access_key", "AWS_KEY_002", "AWS Secret Access Key", "HIGH"),
 
-            // Azure DevOps PAT — 52-char base64 near azure devops / dev.azure.com
+            // Azure DevOps PAT — base64 near azure devops / dev.azure.com / vsts
+            // Microsoft changed PAT length in 2023: old format = 52 chars, new format = 84 chars.
+            // {52,84} covers both generations. Base64 alphabet + padding = [A-Za-z0-9+/=].
             new CtxRule(Pattern.compile(
-                    "(?i)(?:azure[_\\-]?devops|dev\\.azure\\.com|vsts)[^\"'<>\\n]{0,60}[=:]\\s*[\"']?([A-Za-z0-9+/=]{52})[\"']?"),
+                    "(?i)(?:azure[_\\-]?devops|dev\\.azure\\.com|vsts)[^\"'<>\\n]{0,60}[=:]\\s*[\"']?([A-Za-z0-9+/=]{52,84})[\"']?"),
                     1, "azure_devops_pat", "AZURE_DEVOPS_KEY_001", "Azure DevOps Personal Access Token", "HIGH"),
 
             // Snowflake credential — password/token near snowflake keyword
@@ -880,6 +1091,31 @@ public final class Patterns {
                     "aad[_\\-]?client[_\\-]?id|b2c[_\\-]?client[_\\-]?id)\\s*[:=]\\s*[\"']" +
                     "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[\"']"),
                     1, "apim_client_id", "AZURE_APIM_003", "Azure AD / APIM Client ID", "LOW"),
+
+            // GUID/UUID value where key name ends in Token(s) or Secret(s)
+            // e.g. MyAppTokens_Resource, accessToken, refreshToken, clientSecret
+            // Tight suffix match to avoid tokenType, tokenEndpoint, tenantId, resourceId FPs.
+            new CtxRule(Pattern.compile(
+                    "(?i)(?<key>[\"']?[a-zA-Z0-9_\\-]*(?:tokens?|secrets?)[a-zA-Z0-9_\\-]*[\"']?)" +
+                    "\\s*[:=,]\\s*[\"']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\"']?"),
+                    2, "guid_token_resource", "GUID_TOKEN_001", "GUID / UUID Token or Secret Identifier", "INFORMATION"),
+
+            // CryptoJS secret key — a base64-encoded passphrase used as the CryptoJS.AES secret.
+            // Distinct from CRYPTOJS_BLOB_001 (which catches AES-encrypted outputs starting with U2FsdGVkX1).
+            // The key name is anchored (cryptoJsSecretKey variants) so FP risk is minimal.
+            new CtxRule(Pattern.compile(
+                    "(?i)(?<key>[\"']?crypto[_\\-]?js[_\\-]?secret[_\\-]?key[\"']?)\\s*[:=]\\s*[\"']([A-Za-z0-9+/]{20,}={0,2})[\"']"),
+                    2, "cryptojs_secret_key", "CRYPTOJS_KEY_001", "CryptoJS Secret Key (base64-encoded passphrase)", "HIGH"),
+
+            // CryptoJS call site — catches the key when passed as an inline string literal:
+            // CryptoJS.AES.decrypt(ciphertext, "hardcodedKey")
+            // First argument matched with [^,"'\r\n]{0,300} — handles variable names and simple
+            // expressions; avoids crossing commas inside nested calls.
+            // Value: any non-quote string ≥ 8 chars; isPlaceholder() filters dummy values.
+            new CtxRule(Pattern.compile(
+                    "(?i)CryptoJS\\.(?:AES|DES|TripleDES|Rabbit|RC4)\\.(?:encrypt|decrypt)\\s*\\(\\s*" +
+                    "[^,\"'\\r\\n]{0,300},\\s*[\"']([^\"'\\r\\n]{8,})[\"']"),
+                    1, "cryptojs_call_key", "CRYPTOJS_CALLSITE_001", "CryptoJS Inline Secret Key (at call site)", "HIGH"),
 
             // CryptoJS / OpenSSL AES encrypted blob — value starts with U2FsdGVkX1 (base64 of "Salted__")
             // Catches appKey, apimSubscriptionKey, clientId, appId etc. encrypted with CryptoJS.AES.
@@ -1007,7 +1243,33 @@ public final class Patterns {
             // Kubernetes bootstrap token — {6 alnum}.{16 alnum} format near token/bootstrap
             new CtxRule(Pattern.compile(
                     "(?i)(?:token|bootstrap)[^\"'<>\\n]{0,16}[\"':=\\s]{1,5}([a-z0-9]{6}\\.[a-z0-9]{16})\\b"),
-                    1, "kubernetes_bootstrap_token", "K8S_KEY_001", "Kubernetes Bootstrap Token", "HIGH")
+                    1, "kubernetes_bootstrap_token", "K8S_KEY_001", "Kubernetes Bootstrap Token", "HIGH"),
+
+            // CyberArk AIM (Application Identity Manager) individual config fields.
+            // Each cbk* key is self-anchored so all fields in a CyberArkSetting block are
+            // reported independently:
+            //   cbkAppId:  "APAC_ePlacement-BancaDBS_TST_App"  → vault application ID
+            //   cbkSafeId: "APAC_ePlacement-BancaDBS_TST"       → safe name (vault path)
+            //   cbkKey:    "SIT_GoogleMapKey"                    → object/credential name
+            // The previous single-anchor approach only caught the first field encountered
+            // after the CyberArkSetting keyword; multi-field blocks required separate matches.
+            new CtxRule(Pattern.compile(
+                    "\\bcbkAppId\\s*:\\s*[\"']([^\"'\\r\\n]{4,120})[\"']"),
+                    1, "cbkAppId", "CYBERARK_AIM_001", "CyberArk AIM Application ID (cbkAppId)", "HIGH"),
+            new CtxRule(Pattern.compile(
+                    "\\bcbkSafeId\\s*:\\s*[\"']([^\"'\\r\\n]{4,120})[\"']"),
+                    1, "cbkSafeId", "CYBERARK_AIM_003", "CyberArk AIM Safe ID (cbkSafeId)", "HIGH"),
+            new CtxRule(Pattern.compile(
+                    "\\bcbkKey\\s*:\\s*[\"']([^\"'\\r\\n]{4,120})[\"']"),
+                    1, "cbkKey", "CYBERARK_AIM_004", "CyberArk AIM Object/Key Name (cbkKey)", "HIGH"),
+
+            // CyberArk AIM WebService endpoint URL — the URL itself is a HIGH-severity finding:
+            // it confirms an AIM CCP deployment and, combined with the AppID query param,
+            // can be used to query the vault directly if network access allows.
+            // Pattern: AIMWebService/api/Accounts (canonical CCP REST path)
+            new CtxRule(Pattern.compile(
+                    "(?i)(https?://[A-Za-z0-9._\\-]{4,}/AIMWebService/api/Accounts[^\"'\\s<>]*)"),
+                    1, "cyberark_aim_url", "CYBERARK_AIM_002", "CyberArk AIM WebService Endpoint URL", "HIGH")
     );
 
     // =========================================================================
@@ -1109,7 +1371,8 @@ public final class Patterns {
             new AnchoredRule(FIGMA_TOKEN,          "figma_token",            "FIGMA_KEY_001",     "Figma Personal Access Token",       "HIGH"),
             new AnchoredRule(DROPBOX_TOKEN,        "dropbox_token",          "DROPBOX_KEY_001",   "Dropbox Access Token",              "HIGH"),
             new AnchoredRule(SQUARE_ACCESS_TOKEN,  "square_access_token",    "SQUARE_KEY_001",    "Square Access Token",               "HIGH"),
-            new AnchoredRule(STRIPE_PK_LIVE,       "stripe_pub_key_live",    "STRIPE_KEY_004",    "Stripe Publishable Key (Live)",     "MEDIUM"),
+            new AnchoredRule(STRIPE_PK_LIVE,       "stripe_pub_key_live",    "STRIPE_KEY_004",    "Stripe Publishable Key (Live)",     "LOW"),
+            new AnchoredRule(STRIPE_PK_TEST,       "stripe_pub_key_test",    "STRIPE_KEY_006",    "Stripe Publishable Key (Test)",     "INFORMATION"),
             new AnchoredRule(CLOUDINARY_URL,       "cloudinary_api_url",     "CLOUDINARY_KEY_001","Cloudinary API URL",                "HIGH"),
             new AnchoredRule(TEAMS_WEBHOOK,        "teams_webhook_url",      "TEAMS_WEBHOOK_001", "Microsoft Teams Webhook URL",       "HIGH"),
             new AnchoredRule(JWT_TOKEN,            "jwt_token",              "JWT_TOKEN_001",     "JSON Web Token (JWT)",              "MEDIUM"),
@@ -1122,15 +1385,25 @@ public final class Patterns {
             new AnchoredRule(GOOGLE_OAUTH_CLIENT_ID,"google_oauth_client_id","GOOGLE_KEY_002",    "Google OAuth 2.0 Client ID",        "LOW"),
             new AnchoredRule(SQUARE_OAUTH_TOKEN,   "square_oauth_token",     "SQUARE_KEY_002",    "Square OAuth Token",                "HIGH"),
             new AnchoredRule(AZURE_APP_INSIGHTS_CONN,"azure_app_insights_conn","AZURE_CONN_002",  "Azure App Insights Connection String","LOW"),
+            new AnchoredRule(AZURE_IOT_HUB_CONN,   "azure_iot_hub_conn_str", "AZURE_CONN_003",  "Azure IoT Hub Connection String",     "HIGH"),
+            new AnchoredRule(AZURE_EVENTHUB_CONN,  "azure_eventhub_conn_str","AZURE_CONN_004",  "Azure Event Hub / Service Bus Conn String","HIGH"),
+            new AnchoredRule(AZURE_COSMOS_CONN,    "azure_cosmos_conn_str",  "AZURE_CONN_005",  "Azure Cosmos DB Connection String",   "HIGH"),
+            new AnchoredRule(AZURE_REDIS_CONN,     "azure_redis_conn_str",   "AZURE_CONN_006",  "Azure Cache for Redis Connection String","HIGH"),
+            new AnchoredRule(AZURE_ACS_CONN,       "azure_acs_conn_str",     "AZURE_CONN_007",  "Azure Communication Services Conn String","HIGH"),
+            new AnchoredRule(AZURE_WEBPUBSUB_CONN, "azure_webpubsub_conn_str","AZURE_CONN_008", "Azure Web PubSub Connection String",  "HIGH"),
+            new AnchoredRule(AZURE_SIGNALR_CONN,   "azure_signalr_conn_str", "AZURE_CONN_009",  "Azure SignalR Connection String",     "HIGH"),
             new AnchoredRule(GCP_SA_CLIENT_EMAIL,  "gcp_sa_client_email",    "GCP_KEY_001",       "GCP Service Account Email",         "LOW"),
 
             // --- Additional vendor token patterns ---
             new AnchoredRule(RAZORPAY_LIVE,        "razorpay_live_key",      "RAZORPAY_KEY_001",  "Razorpay Live Key",                 "HIGH"),
             new AnchoredRule(RAZORPAY_TEST,        "razorpay_test_key",      "RAZORPAY_KEY_002",  "Razorpay Test Key",                 "LOW"),
             new AnchoredRule(SUPABASE_PAT,         "supabase_pat",           "SUPABASE_KEY_001",  "Supabase Personal Access Token",    "HIGH"),
-            new AnchoredRule(BRAINTREE_TOKEN,      "braintree_access_token", "BRAINTREE_KEY_001", "Braintree OAuth Access Token",      "HIGH"),
+            new AnchoredRule(BRAINTREE_TOKEN,         "braintree_access_token",        "BRAINTREE_KEY_001", "Braintree OAuth Access Token",              "HIGH"),
+            new AnchoredRule(BRAINTREE_CLIENT_PROD,   "braintree_client_token_prod",   "BRAINTREE_KEY_003", "Braintree Client Token (Production)",        "MEDIUM"),
+            new AnchoredRule(BRAINTREE_CLIENT_SANDBOX,"braintree_client_token_sandbox","BRAINTREE_KEY_002", "Braintree Client Token (Sandbox / Test)",    "LOW"),
             new AnchoredRule(KLAVIYO_API_KEY,      "klaviyo_api_key",        "KLAVIYO_KEY_001",   "Klaviyo Private API Key",           "MEDIUM"),
             new AnchoredRule(STRIPE_WEBHOOK_SECRET,"stripe_webhook_secret",  "STRIPE_KEY_005",    "Stripe Webhook Signing Secret",     "HIGH"),
+            new AnchoredRule(BTOA_CREDS,           "btoa_oauth_creds",       "BTOA_CREDS_001",    "OAuth Credential Pair in btoa() Call","HIGH"),
 
             // --- Titus parity: gap-closing anchored rules ---
             new AnchoredRule(DEEPSEEK_API_KEY,     "deepseek_api_key",       "DEEPSEEK_KEY_001",  "DeepSeek API Key",                  "HIGH"),
@@ -1143,6 +1416,10 @@ public final class Patterns {
             new AnchoredRule(SCALINGO_TOKEN,       "scalingo_api_token",     "SCALINGO_KEY_001",  "Scalingo API Token",                "HIGH"),
             new AnchoredRule(ADAFRUIT_IO_KEY,      "adafruit_io_key",        "ADAFRUIT_KEY_001",  "Adafruit IO Key",                   "HIGH"),
             new AnchoredRule(SONARQUBE_TOKEN,      "sonarqube_token",        "SONAR_KEY_001",     "SonarQube / SonarCloud Token",      "MEDIUM"),
-            new AnchoredRule(BCRYPT_HASH,          "bcrypt_password_hash",   "PWHASH_KEY_001",    "bcrypt Password Hash (Credential Exposure)", "HIGH")
+            new AnchoredRule(BCRYPT_HASH,          "bcrypt_password_hash",   "PWHASH_KEY_001",    "bcrypt Password Hash (Credential Exposure)", "HIGH"),
+            new AnchoredRule(FLEXMONSTER_LICENSE_KEY,"flexmonster_license_key","FLEXMONSTER_KEY_001","FlexMonster License Key",              "HIGH"),
+
+            // GCP OAuth2 client secret — GOCSPX- prefix; distinct from the short-lived ya29. access token
+            new AnchoredRule(GCP_CLIENT_SECRET,    "gcp_client_secret",      "GCP_KEY_004",       "GCP OAuth2 Client Secret",          "HIGH")
     );
 }
