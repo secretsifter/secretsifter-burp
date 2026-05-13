@@ -204,7 +204,7 @@ public class BulkScanPanel {
 
         tableModel = new DefaultTableModel(COLS, 0) {
             @Override public boolean isCellEditable(int r, int c) {
-                return c == COL_SEV || c == COL_CONF || c == COL_DEL;
+                return c == COL_SEV || c == COL_CONF;
             }
         };
 
@@ -513,7 +513,7 @@ public class BulkScanPanel {
             @Override public void mouseClicked(MouseEvent e) {
                 int viewRow = resultsTable.rowAtPoint(e.getPoint());
                 int col     = resultsTable.columnAtPoint(e.getPoint());
-                if (viewRow >= 0 && col == COL_DEL) {
+                if (viewRow >= 0 && col >= 0 && resultsTable.convertColumnIndexToModel(col) == COL_DEL) {
                     int modelRow = sorter.convertRowIndexToModel(viewRow);
                     tableModel.removeRow(modelRow);
                     synchronized (tableFindings) {
@@ -2322,6 +2322,10 @@ public class BulkScanPanel {
             totalDone.incrementAndGet();
             updateProgress();
             if (mf == null || mf.body() == null) continue;
+
+            // Scan the manifest body itself — it may contain inline secrets
+            // (e.g. AWS keys, CDN tokens) alongside the chunk file map.
+            scanAndAppend(mf.body(), "application/json", manifestUrl, mf.requestResponse());
 
             List<String> chunkUrls = SecretScanner.extractAssetManifestUrls(mf.body(), baseUrl);
             totalExpected.addAndGet(chunkUrls.size());

@@ -461,6 +461,14 @@ public final class Patterns {
     // GOCSPX- prefix + 28 base62url chars.  Distinct from the ya29. access token.
     public static final Pattern GCP_CLIENT_SECRET       = Pattern.compile("\\bGOCSPX-[A-Za-z0-9_\\-]{28}\\b");
 
+    // OAuth2/OIDC resource ID disclosure — Azure AD B2C, Auth0, Okta, AD FS, etc.
+    // The resource field (or resourceId) carries the API app/client GUID. Public
+    // by OAuth design but useful recon info when paired with the tenant URL.
+    public static final Pattern OAUTH_RESOURCE_ID       = Pattern.compile(
+            "(?i)\\b(?:resource|resource[_-]?id|resourceId)\\s*[:=]\\s*" +
+            "[\\[\"']{1,2}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-" +
+            "[0-9a-f]{4}-[0-9a-f]{12})[\"'\\]]{1,2}");
+
     // Twitch stream key — live_{8-12 digit accountId}_{30-36 alnum}
     public static final Pattern TWITCH_STREAM_KEY       = Pattern.compile("\\blive_\\d{8,12}_[A-Za-z0-9]{30,36}\\b");
 
@@ -1028,7 +1036,7 @@ public final class Patterns {
 
             // Azure APIM subscription key — 32-64 alnum after Ocp-Apim-Subscription-Key header
             new CtxRule(Pattern.compile(
-                    "(?i)(?:Ocp-?Apim-?Subscription-?Key|ocp[_\\-]?apim[_\\-]?subscription[_\\-]?key)\\s*[:=]\\s*[\"']?([A-Za-z0-9]{32,64})[\"']?"),
+                    "(?i)(?:Ocp-?Apim-?Subscription-?Key|ocp[_\\-]?apim[_\\-]?subscription[_\\-]?key|subscription[_\\-]?key)\\s*[:=]\\s*[\"']?([A-Za-z0-9]{32,64})[\"']?"),
                     1, "azure_apim_subscription_key", "AZURE_APIM_001", "Azure APIM Subscription Key", "HIGH"),
 
             // Azure App Insights instrumentation key (bare UUID) — requires keyword context
@@ -1420,6 +1428,7 @@ public final class Patterns {
             new AnchoredRule(FLEXMONSTER_LICENSE_KEY,"flexmonster_license_key","FLEXMONSTER_KEY_001","FlexMonster License Key",              "HIGH"),
 
             // GCP OAuth2 client secret — GOCSPX- prefix; distinct from the short-lived ya29. access token
-            new AnchoredRule(GCP_CLIENT_SECRET,    "gcp_client_secret",      "GCP_KEY_004",       "GCP OAuth2 Client Secret",          "HIGH")
+            new AnchoredRule(GCP_CLIENT_SECRET,    "gcp_client_secret",      "GCP_KEY_004",       "GCP OAuth2 Client Secret",          "HIGH"),
+            new AnchoredRule(OAUTH_RESOURCE_ID,    "oauth_resource_id",      "OAUTH_KEY_001",     "OAuth2/OIDC Resource ID Disclosure", "INFORMATION")
     );
 }
