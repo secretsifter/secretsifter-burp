@@ -1,7 +1,7 @@
 # SecretSifter — Burp Suite Extension
 
-A passive and active secret-detection extension for Burp Suite (Montoya API).
-Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP traffic.
+Passive and active secret-detection extension for Burp Suite (Montoya API).
+Detects exposed API keys, credentials, PII, JWTs, and connection strings in HTTP traffic across proxy, bulk-scan, and site-map workflows.
 
 > **Community Edition note:** Passive scan check registration requires Burp Suite Professional.
 > All other features (Bulk Scan, right-click rescan, sitemap sweep, proxy handler) work in
