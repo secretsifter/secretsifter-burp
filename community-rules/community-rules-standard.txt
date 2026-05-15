@@ -1,0 +1,313 @@
+# SecretSifter Community Rules — Standard
+# Format: RuleName | regex | severity
+#
+# These patterns complement SecretSifter's built-in rules.
+# All patterns are vendor-specific with near-zero false positive rate.
+# Safe to enable on all scan tiers and all target types.
+#
+# Version: 1.1.0
+#
+# HOW TO USE:
+#   Settings → Custom Rules → Import from file → select this file → Save Settings
+#
+# NOTE: These rules do NOT duplicate SecretSifter's built-in rules.
+#       Built-ins already cover: GitHub, GitLab, AWS, Stripe, Slack, OpenAI,
+#       Shopify, HubSpot, Mailchimp, Databricks, Google API, Mapbox, SendGrid,
+#       Twilio Account SID, Vault, Discord, Telegram, New Relic, Dynatrace, and more.
+
+# ── MESSAGING & COLLABORATION ──────────────────────────────────────────────────
+
+TelegramBotToken | \b[0-9]{5,16}:A[0-9A-Za-z_-]{34}\b | HIGH
+DiscordBotToken | \b[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}\b | HIGH
+DiscordWebhook | https://discord(?:app)?\.com/api/webhooks/[0-9]{17,20}/[A-Za-z0-9_-]{60,68} | HIGH
+SlackWebhookUrl | https://hooks\.slack\.com/services/T[A-Za-z0-9_]{8,12}/B[A-Za-z0-9_]{8,12}/[A-Za-z0-9_]{24} | HIGH
+MicrosoftTeamsWebhook | https://[a-z0-9]+\.webhook\.office\.com/webhookb2/[0-9a-f-]{36}@ | HIGH
+
+# ── OBSERVABILITY & MONITORING ─────────────────────────────────────────────────
+
+NewRelicUserApiKey | \bNRAK-[A-Z0-9]{27}\b | HIGH
+NewRelicAdminApiKey | \bNRAA-[a-f0-9]{27}\b | HIGH
+NewRelicInsertKey | \bNRII-[A-Za-z0-9_-]{32}\b | HIGH
+NewRelicBrowserKey | \bNRJS-[a-f0-9]{19}\b | HIGH
+DynatraceToken | \bdt[01]\.[A-Z]{3,8}\.[a-f0-9]{64}\b | HIGH
+GrafanaServiceAccountToken | \bglsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}\b | HIGH
+GrafanaCloudApiToken | \bglc_[A-Za-z0-9+/_-]{32,}\b | HIGH
+SentryOrgToken | \bsntrys_[a-f0-9]{64}\b | HIGH
+DatadogClientToken | \bpub:[a-f0-9]{32}\b | MEDIUM
+
+# ── PROJECT MANAGEMENT & PRODUCTIVITY ─────────────────────────────────────────
+
+NotionApiToken | \bsecret_[A-Za-z0-9]{43}\b | HIGH
+NotionIntegrationToken | \bntn_[A-Za-z0-9]{38,}\b | HIGH
+LinearApiKey | \blin_api_[A-Za-z0-9]{40}\b | HIGH
+PostmanApiToken | \bPMAK-[a-f0-9]{24}-[a-f0-9]{34}\b | HIGH
+AtlassianApiToken | \bATATT3[A-Za-z0-9_=\-]{100,}\b | HIGH
+AsanaPersonalAccessToken | \b[12]/[0-9]{16}:[0-9a-f]{32}\b | HIGH
+
+# ── AI & ML PLATFORMS ──────────────────────────────────────────────────────────
+
+HuggingFaceAccessToken | \bhf_[A-Za-z0-9]{34}\b | HIGH
+HuggingFaceOrgToken | \bapi_org_[A-Za-z0-9]{34}\b | HIGH
+PerplexityApiKey | \bpplx-[a-f0-9]{48}\b | HIGH
+
+# ── DEVOPS & INFRASTRUCTURE ────────────────────────────────────────────────────
+
+PulumiApiToken | \bpul-[a-f0-9]{40}\b | HIGH
+TerraformCloudToken | \b[a-zA-Z0-9]{14}\.atlasv1\.[a-zA-Z0-9_\-]{60,}\b | HIGH
+PlanetScaleToken | \bpscale_tkn_[A-Za-z0-9._-]{43,}\b | HIGH
+PlanetScaleOAuthToken | \bpscale_oauth_[A-Za-z0-9._-]{32,}\b | HIGH
+PlanetScalePassword | \bpscale_pw_[A-Za-z0-9._-]{43,}\b | HIGH
+DockerHubPAT | \bdckr_pat_[A-Za-z0-9_-]{56}\b | HIGH
+FlyioAccessToken | \bFlyv1 [A-Za-z0-9+/]{100,}={0,2}\b | HIGH
+ScalingoApiToken | \btk-us-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b | HIGH
+DopplerServiceToken | \bdp\.st\.[a-z0-9]{2,8}\.[a-zA-Z0-9]{40}\b | HIGH
+InfracostApiToken | \bico-[a-zA-Z0-9]{32}\b | HIGH
+HarnessApiKey | \b[a-zA-Z0-9]{22}\.pat\.[a-zA-Z0-9]{22}\.[a-zA-Z0-9]{16}\b | HIGH
+
+# ── CLOUD PLATFORMS ────────────────────────────────────────────────────────────
+
+DigitalOceanPAT | \bdop_v1_[a-f0-9]{64}\b | HIGH
+DigitalOceanOAuthToken | \bdoo_v1_[a-f0-9]{64}\b | HIGH
+DigitalOceanRefreshToken | \bdor_v1_[a-f0-9]{64}\b | HIGH
+NetlifyAccessToken | (?i)netlify[^a-z0-9]{0,15}(?:access[_\-]?token|token|pat)[^a-z0-9]{0,10}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) | HIGH
+OktaApiToken | (?i)okta[^a-z0-9]{0,15}(00[A-Za-z0-9_\-]{38}) | HIGH
+
+# ── PACKAGE REGISTRIES & CODE TOOLS ───────────────────────────────────────────
+
+PyPIUploadToken | \bpypi-[A-Za-z0-9_\-]{50,}\b | HIGH
+RubyGemsApiToken | \brubygems_[a-f0-9]{48}\b | HIGH
+SonarQubeToken | \bsqu_[a-f0-9]{40}\b | HIGH
+JFrogApiKey | \bAKCp[A-Za-z0-9]{70,}\b | HIGH
+ClojarsApiToken | \bCLOJARS_[a-zA-Z0-9_\-=]{40,}\b | HIGH
+CodecovAccessToken | (?i)codecov[^a-z0-9]{0,10}(?:token|access[_\-]?token)[^a-z0-9]{0,10}([a-z0-9]{10}-[a-z0-9]{10}-[a-z0-9]{10}-[a-z0-9]{10}) | HIGH
+
+# ── PAYMENT & FINANCIAL ────────────────────────────────────────────────────────
+
+SquareAccessToken | \bEAAAE[A-Za-z0-9_-]{60,}\b | HIGH
+SquareOAuthSecret | \bsq0[csc]sp-[0-9A-Za-z\-_]{43}\b | HIGH
+TwilioApiKeySid | \bSK[0-9a-fA-F]{32}\b | HIGH
+FlutterwavePublicKey | \bFLWPUBK-[a-f0-9]{32}-X\b | HIGH
+FlutterwaveSecretKey | \bFLWSECK-[a-f0-9]{32}-X\b | HIGH
+FlutterwaveEncryptionKey | \bFLWSECK_TEST-[a-f0-9]{32}-X\b | MEDIUM
+
+# ── STORAGE & FILE SERVICES ────────────────────────────────────────────────────
+
+DropboxLongLivedToken | \bsl\.[A-Za-z0-9_-]{136}\b | HIGH
+DropboxShortLivedToken | \bsl\.[A-Za-z0-9_-]{57}\b | HIGH
+
+# ── EMAIL & COMMUNICATION SERVICES ────────────────────────────────────────────
+
+SendinBlueApiToken | \bxkeysib-[a-f0-9]{64}-[a-zA-Z0-9]{16}\b | HIGH
+MailgunPrivateKey | \bkey-[0-9a-zA-Z]{32}\b | HIGH
+MailgunSigningKey | \bhex-[0-9a-zA-Z]{32}\b | HIGH
+MessageBirdApiKey | (?i)(?:messagebird|bird)[^a-z0-9]{0,10}(?:api[_\-]?key|access[_\-]?key)[^a-z0-9]{0,10}([a-zA-Z0-9]{25}) | HIGH
+TwilioApiKey | \bSK[0-9a-fA-F]{32}\b | HIGH
+
+# ── SOCIAL & MEDIA PLATFORMS ──────────────────────────────────────────────────
+
+TwitterBearerToken | \bAAAAAAAAAAAAAAAAAAAAA[A-Za-z0-9%_\-]{80,}\b | HIGH
+FacebookAccessToken | \bEAACEdEose0cBA[0-9A-Za-z]+\b | HIGH
+TwitchAccessToken | \booth[a-z0-9]{30}\b | HIGH
+
+# ── CRYPTO & BLOCKCHAIN ────────────────────────────────────────────────────────
+
+CoinbaseAccessToken | \borganizations/[0-9a-f-]{36}/apiKeys/[0-9a-f-]{36}\b | HIGH
+
+# ── ENCRYPTION & KEYS ─────────────────────────────────────────────────────────
+
+AgeSecretKey | \bAGE-SECRET-KEY-1[A-Z0-9]{58}\b | HIGH
+OnePasswordServiceAccount | \bops_[a-zA-Z0-9+/_-]{70,}\b | HIGH
+OnePasswordSecretKey | \bA3-[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{5}-[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}\b | HIGH
+
+# ── ADDITIONAL SCM & CI/CD ─────────────────────────────────────────────────────
+
+GitLabSessionCookie | \b_gitlab_session=[a-f0-9]{32}\b | HIGH
+TravisCIToken | (?i)travis[^a-z0-9]{1,10}([a-zA-Z0-9_\-]{22}) | MEDIUM
+CircleCIToken | \bcircle-token [a-f0-9]{40}\b | HIGH
+DroneCIToken | (?i)drone[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+SourcegraphAccessToken | \bsgp_[a-f0-9]{96}\b | HIGH
+
+# ── OBSERVABILITY (ADDITIONAL) ─────────────────────────────────────────────────
+
+SumoLogicAccessId | \bsu[A-Za-z0-9]{12}\b | HIGH
+SumoLogicAccessKey | (?i)sumo(?:logic)?[^a-z0-9]{0,15}(?:access[_\-]?key|secret[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{64}) | HIGH
+PagerDutyApiKey | \bu\+[a-z0-9]{11}\b | HIGH
+LaunchDarklyApiKey | \b(?:api|sdk|pub)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b | MEDIUM
+SnykApiToken | (?i)snyk[^a-z0-9]{1,10}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) | HIGH
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SPECIALIST — ADDITIONAL CLOUD & HOSTING PROVIDERS
+# ════════════════════════════════════════════════════════════════════════════════
+
+IbmCloudApiKey | (?i)ibm[^a-z0-9]{0,10}(?:cloud[^a-z0-9]{0,10})?api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{44}) | HIGH
+LinodeApiToken | (?i)linode[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([a-f0-9]{64}) | HIGH
+VultrApiKey | (?i)vultr[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Z0-9]{36}) | HIGH
+HetznerCloudApiToken | (?i)hetzner[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9]{64,}) | HIGH
+VercelApiToken | (?i)vercel[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9]{24}) | HIGH
+RenderApiToken | (?i)render[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,64}) | MEDIUM
+RailwayApiToken | (?i)railway[^a-z0-9]{0,10}token[^a-z0-9]{0,10}([a-f0-9]{64}) | HIGH
+FastlyApiToken | (?i)fastly[^a-z0-9]{0,10}(?:api[_\-]?token|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32}) | HIGH
+CloudflareApiToken | (?i)cloudflare[^a-z0-9]{0,10}api[_\-]?token[^a-z0-9]{0,10}([A-Za-z0-9_\-]{40}) | HIGH
+CloudflareGlobalApiKey | (?i)cloudflare[^a-z0-9]{0,10}(?:global[^a-z0-9]{0,10})?api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{37}) | HIGH
+
+# ── ADDITIONAL PAYMENT PROCESSORS ─────────────────────────────────────────────
+
+AdyenApiKey | (?i)adyen[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{64,80}) | HIGH
+AuthorizeNetLoginId | (?i)authorize(?:net)?[^a-z0-9]{0,10}(?:api[_\-]?login[_\-]?id?)[^a-z0-9]{0,10}([A-Za-z0-9]{10}) | HIGH
+AuthorizeNetTransactionKey | (?i)authorize(?:net)?[^a-z0-9]{0,10}transaction[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{16}) | HIGH
+CheckoutComSecretKey | \bsk_(?:prod|sbox)_[A-Za-z0-9]{32,}\b | HIGH
+PatreonClientSecret | (?i)patreon[^a-z0-9]{0,10}client[_\-]?secret[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,}) | HIGH
+MercadoPagoAccessToken | \bAPP_USR-[0-9]{18}-[0-9]{6}-[a-f0-9]{32}-[0-9]{9}\b | HIGH
+PayUMerchantKey | (?i)payu[^a-z0-9]{0,10}(?:merchant[_\-]?key|secret)[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+LemonSqueezyApiKey | (?i)lemonsqueezy[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{40,}) | HIGH
+PaddleApiKey | (?i)paddle[^a-z0-9]{0,10}(?:vendor[_\-]?auth[_\-]?code|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{40,}) | HIGH
+
+# ── ADDITIONAL EMAIL & SMS SERVICES ───────────────────────────────────────────
+
+PostmarkServerToken | (?i)postmark[^a-z0-9]{0,10}(?:server[_\-]?token|api[_\-]?token)[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+SparkPostApiKey | (?i)sparkpost[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-fA-F0-9]{40}) | HIGH
+CustomerIoApiKey | (?i)customer\.?io[^a-z0-9]{0,10}(?:site[_\-]?api[_\-]?key|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{20,}) | HIGH
+MailjetApiKey | (?i)mailjet[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+MailjetSecretKey | (?i)mailjet[^a-z0-9]{0,10}secret[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+ElasticEmailApiKey | (?i)elastic[_\-]?email[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-zA-Z0-9_\-]{36,}) | HIGH
+PlivoAuthId | (?i)plivo[^a-z0-9]{0,10}auth[_\-]?id[^a-z0-9]{0,10}([A-Z0-9]{20}) | HIGH
+PlivoAuthToken | (?i)plivo[^a-z0-9]{0,10}auth[_\-]?token[^a-z0-9]{0,10}([a-z0-9]{40}) | HIGH
+InfobipApiKey | (?i)infobip[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+SinchApiKey | (?i)sinch[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+
+# ── IDENTITY & ACCESS MANAGEMENT ──────────────────────────────────────────────
+
+Auth0ClientSecret | (?i)auth0[^a-z0-9]{0,10}client[_\-]?secret[^a-z0-9]{0,10}([A-Za-z0-9_\-]{43}) | HIGH
+Auth0ManagementToken | (?i)auth0[^a-z0-9]{0,10}(?:management[_\-]?api[_\-]?token|m2m[_\-]?token)[^a-z0-9]{0,10}(eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}) | HIGH
+AzureDevOpsPAT | (?i)(?:azure[_\-]?devops|ado)[^a-z0-9]{0,10}(?:pat|personal[_\-]?access[_\-]?token)[^a-z0-9]{0,10}([A-Za-z0-9+/]{52,}={0,2}) | HIGH
+BitbucketAppPassword | (?i)bitbucket[^a-z0-9]{0,10}(?:app[_\-]?password)[^a-z0-9]{0,10}([A-Za-z0-9]{20,30}) | HIGH
+KeycloakClientSecret | (?i)keycloak[^a-z0-9]{0,10}client[_\-]?secret[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,}) | HIGH
+FirebaseAdminSdkIndicator | "type"\s*:\s*"service_account" | HIGH
+AzureClientSecretValue | (?i)"client_secret"\s*:\s*"([A-Za-z0-9~_.@\-]{34,})" | HIGH
+AzureTenantId | (?i)(?:tenant[_\-]?id|directory[_\-]?id)\s*[=:]\s*['""]?([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})['""]? | INFORMATION
+
+# ── SECURITY RESEARCH & OSINT APIS ────────────────────────────────────────────
+
+VirusTotalApiKey | (?i)virustotal[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{64}) | HIGH
+ShodanApiKey | (?i)shodan[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+CensysApiSecret | (?i)censys[^a-z0-9]{0,10}(?:api[_\-]?secret|api[_\-]?id)[^a-z0-9]{0,10}([A-Za-z0-9]{32,40}) | HIGH
+HibpApiKey | (?i)(?:hibp|haveibeenpwned)[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9\-]{32,}) | HIGH
+SecurityTrailsApiKey | (?i)securitytrails[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+GreyNoiseApiKey | (?i)greynoise[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{40}) | HIGH
+
+# ── TESTING, QA & BROWSER AUTOMATION ──────────────────────────────────────────
+
+BrowserStackAccessKey | (?i)browserstack[^a-z0-9]{0,10}(?:access[_\-]?key|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{20}) | HIGH
+SauceLabsAccessKey | (?i)sauce(?:labs)?[^a-z0-9]{0,10}access[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+LambdaTestApiKey | (?i)lambdatest[^a-z0-9]{0,10}(?:access[_\-]?token|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{32,}) | HIGH
+PercyToken | (?i)percy[^a-z0-9]{0,10}token[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+ApplitoolsApiKey | (?i)applitools[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{32,}) | HIGH
+
+# ── AI / ML PLATFORMS (ADDITIONAL) ────────────────────────────────────────────
+
+TogetherAiApiKey | (?i)together(?:ai)?[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{64}) | HIGH
+MistralApiKey | (?i)mistral[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{32,}) | HIGH
+StabilityAiApiKey | (?i)stability(?:ai)?[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}(sk-[A-Za-z0-9]{48,}) | HIGH
+ElevenLabsApiKey | (?i)elevenlabs[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+CohereApiKeyCtx | (?i)cohere[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{40}) | HIGH
+FireworksAiApiKey | (?i)fireworks(?:ai)?[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,}) | HIGH
+NovitaAiApiKey | (?i)novita(?:ai)?[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,}) | HIGH
+CerebrasApiKey | (?i)cerebras[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}(csk-[A-Za-z0-9]{40,}) | HIGH
+
+# ── SEARCH, VECTOR STORES & DATA PLATFORMS ────────────────────────────────────
+
+AlgoliaAdminApiKey | (?i)algolia[^a-z0-9]{0,10}(?:admin[_\-]?api[_\-]?key|api[_\-]?key)[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+AlgoliaAppId | (?i)algolia[^a-z0-9]{0,10}(?:app(?:lication)?[_\-]?id)[^a-z0-9]{0,10}([A-Z0-9]{10}) | MEDIUM
+TypesenseApiKey | (?i)typesense[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+PineconeApiKey | (?i)pinecone[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+WeaviateApiKey | (?i)weaviate[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{20,}) | HIGH
+MeiliSearchMasterKey | (?i)meilisearch[^a-z0-9]{0,10}(?:master[_\-]?key|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+QdrantApiKey | (?i)qdrant[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+
+# ── ADDITIONAL DEVOPS & CI/CD TOOLS ───────────────────────────────────────────
+
+OctopusDeployApiKey | \bAPI-[A-Z0-9]{28,}\b | HIGH
+TeamCityApiToken | (?i)teamcity[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{40,}) | HIGH
+BuddyApiToken | (?i)buddy[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([a-f0-9]{40}) | HIGH
+AzurePipelinesBuildToken | (?i)system\.accesstoken[^a-z0-9]{0,10}([A-Za-z0-9+/]{52}={0,2}) | HIGH
+NeonDbConnectionString | postgres(?:ql)?://[A-Za-z0-9_\-]+:[^@]{8,}@ep-[a-z0-9\-]+\.neon\.tech | HIGH
+SupabaseConnectionString | postgres(?:ql)?://[A-Za-z0-9_\-]+:[^@]{8,}@db\.[a-z0-9]+\.supabase\.co | HIGH
+KoyebApiToken | (?i)koyeb[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{64,}) | HIGH
+
+# ── CRYPTOCURRENCY & BLOCKCHAIN APIs ──────────────────────────────────────────
+
+EthereumPrivateKeyCtx | (?i)(?:private[_\-]?key|eth[_\-]?private)[^a-z0-9]{0,10}(0x[a-f0-9]{64}) | HIGH
+BitcoinWifPrivateKey | \b5[HJK][1-9A-HJ-NP-Za-km-z]{49}\b | HIGH
+BitcoinWifCompressedKey | \b[KL][1-9A-HJ-NP-Za-km-z]{51}\b | HIGH
+BinanceApiKey | (?i)binance[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{64}) | HIGH
+BinanceApiSecret | (?i)binance[^a-z0-9]{0,10}(?:api[_\-]?secret|secret[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{64}) | HIGH
+KrakenApiKey | (?i)kraken[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9+/]{56}) | HIGH
+InfuraProjectSecret | (?i)infura[^a-z0-9]{0,10}(?:project[_\-]?secret|api[_\-]?key)[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+AlchemyApiKey | (?i)alchemy[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,}) | HIGH
+
+# ── STRUCTURED SECRET TYPES ────────────────────────────────────────────────────
+
+PgpPrivateKeyBlock | -----BEGIN PGP PRIVATE KEY BLOCK-----(?:\r?\n|\\n)(?:[A-Za-z0-9+/=]{10,76}(?:\r?\n|\\n))+ | HIGH
+PuttyPrivateKey | PuTTY-User-Key-File-[23]: | HIGH
+AwsMwsAuthToken | amzn\.mws\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12} | HIGH
+GcpPrivateKeyIdField | "private_key_id"\s*:\s*"([a-f0-9]{40})" | HIGH
+VaultBatchToken | \bhvb\.[A-Za-z0-9_\-]{90,}\b | HIGH
+VaultPeriodicToken | \bhvr\.[A-Za-z0-9_\-]{90,}\b | HIGH
+JwtSecretAlgorithmHS | (?i)"alg"\s*:\s*"HS(?:256|384|512)" | INFORMATION
+
+# ── MONITORING, APM & OBSERVABILITY (ADDITIONAL) ──────────────────────────────
+
+AppDynamicsAccessKey | (?i)appdynamics[^a-z0-9]{0,10}(?:account[_\-]?access[_\-]?key|access[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+InstanaAgentKey | (?i)instana[^a-z0-9]{0,10}(?:agent[_\-]?key|api[_\-]?token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{22}) | HIGH
+ElasticApmSecretToken | (?i)elastic[_\-]?apm[^a-z0-9]{0,10}(?:secret[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+LogDnaIngestionKey | (?i)log(?:dna|insight)[^a-z0-9]{0,10}(?:ingestion[_\-]?key|api[_\-]?key)[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+HoneycombApiKey | (?i)honeycomb[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+RaygunApiKey | (?i)raygun[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+ClarityProjectToken | (?i)(?:clarity|ms[_\-]?clarity)[^a-z0-9]{0,10}(?:project[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9]{12,}) | MEDIUM
+
+# ── ADDITIONAL STORAGE & FILE SERVICES ────────────────────────────────────────
+
+BoxDeveloperToken | (?i)box[^a-z0-9]{0,10}(?:developer[_\-]?token|api[_\-]?key)[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+SupabaseAnonKey | (?i)supabase[^a-z0-9]{0,10}anon[_\-]?key[^a-z0-9]{0,10}(eyJ[A-Za-z0-9_\-]{100,}) | MEDIUM
+CloudflareR2AccessKeyId | (?i)(?:cloudflare[_\-]?r2|r2)[^a-z0-9]{0,10}access[_\-]?key[_\-]?id[^a-z0-9]{0,10}([A-Za-z0-9]{20,}) | HIGH
+BackblazeApplicationKeyId | (?i)backblaze[^a-z0-9]{0,10}(?:application[_\-]?key[_\-]?id|key[_\-]?id)[^a-z0-9]{0,10}([0-9]{12}) | MEDIUM
+
+# ── ADDITIONAL E-COMMERCE, CRM & PRODUCTIVITY ─────────────────────────────────
+
+WixApiKey | (?i)wix[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{36,}) | MEDIUM
+ZohoAccessToken | (?i)zoho[^a-z0-9]{0,10}(?:access[_\-]?token)[^a-z0-9]{0,10}([A-Za-z0-9._\-]{64,}) | HIGH
+ZendeskWebhookSignSecret | (?i)zendesk[^a-z0-9]{0,10}(?:webhook[_\-]?signing[_\-]?secret|signing[_\-]?secret)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+ShopifyCustomAppToken | (?i)shopify[^a-z0-9]{0,10}access[_\-]?token[^a-z0-9]{0,10}([a-fA-F0-9]{32}) | HIGH
+TrelloApiKey | (?i)trello[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+MondayApiToken | (?i)monday(?:\.com)?[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}(eyJ[A-Za-z0-9_\-]{50,}) | HIGH
+ClickUpApiToken | \bpk_[0-9]{1,10}_[A-Z0-9]{32,}\b | HIGH
+AirtableApiKeyCtx | (?i)airtable[^a-z0-9]{0,10}(?:api[_\-]?key)[^a-z0-9]{0,10}(key[A-Za-z0-9]{14}) | HIGH
+
+# ── ADDITIONAL INFRASTRUCTURE & HASHICORP ─────────────────────────────────────
+
+ConsulAclToken | (?i)consul[^a-z0-9]{0,10}(?:token|acl[_\-]?token)[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+NomadSecretId | (?i)nomad[^a-z0-9]{0,10}(?:secret[_\-]?id|token)[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+AnsibleTowerToken | (?i)(?:ansible[_\-]?tower|awx)[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9]{20,}) | HIGH
+EtcdAuthPassword | (?i)etcd[^a-z0-9]{0,10}(?:password|auth[_\-]?password)[^a-z0-9]{0,10}([A-Za-z0-9_@!#]{12,}) | HIGH
+ArgocdToken | (?i)argocd[^a-z0-9]{0,10}token[^a-z0-9]{0,10}([A-Za-z0-9_.\-]{40,}) | HIGH
+FluxCdToken | (?i)flux(?:cd)?[^a-z0-9]{0,10}token[^a-z0-9]{0,10}([A-Za-z0-9_\-]{40,}) | HIGH
+
+# ── ADDITIONAL TELECOM & NOTIFICATIONS ────────────────────────────────────────
+
+BandwidthApiToken | (?i)bandwidth[^a-z0-9]{0,10}(?:api[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+KaleyraApiKey | (?i)kaleyra[^a-z0-9]{0,10}api[_\-]?key[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,}) | HIGH
+ExpoAccessToken | (?i)expo[^a-z0-9]{0,10}(?:access[_\-]?token|token)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{32,}) | HIGH
+OneSignalApiKey | (?i)onesignal[^a-z0-9]{0,10}(?:api[_\-]?key|rest[_\-]?api[_\-]?key)[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+PusherKey | (?i)pusher[^a-z0-9]{0,10}(?:key|app[_\-]?key)[^a-z0-9]{0,10}([a-f0-9]{20}) | MEDIUM
+PusherSecret | (?i)pusher[^a-z0-9]{0,10}(?:secret|app[_\-]?secret)[^a-z0-9]{0,10}([a-f0-9]{20}) | HIGH
+AblyApiKey | \b[A-Za-z0-9_\-]{8}\.[A-Za-z0-9_\-]{6}:[A-Za-z0-9_\-]{22,}\b | HIGH
+
+# ── ADDITIONAL GENERIC & CONTEXT-GATED ────────────────────────────────────────
+
+ServiceAccountJsonKey | (?i)"(?:client_email|private_key_id)"\s*:\s*"[^"]{10,}" | HIGH
+OAuth2RefreshToken | (?i)"refresh_token"\s*:\s*"([A-Za-z0-9_\-./+]{30,})" | HIGH
+OAuth2AccessToken | (?i)"access_token"\s*:\s*"([A-Za-z0-9_\-./+]{40,})" | MEDIUM
+HardcodedEncryptionKey | (?i)(?:encryption[_\-]?key|aes[_\-]?key|cipher[_\-]?key)\s*[=:]\s*['""]([A-Za-z0-9+/=]{24,})['""] | HIGH
+Pkcs12Password | (?i)(?:pfx|pkcs12|p12)[^a-z0-9]{0,10}password[^a-z0-9]{0,10}([A-Za-z0-9_@!#$%^&*\-]{8,}) | HIGH
+KubernetesServiceAccountToken | (?i)kubernetes[^a-z0-9]{0,10}(?:service[_\-]?account[_\-]?token|sa[_\-]?token)[^a-z0-9]{0,10}(eyJ[A-Za-z0-9_\-]{100,}) | HIGH
+InternalApiKeyHeader | (?i)X-Internal-(?:Api-Key|Auth|Token|Secret):\s*([A-Za-z0-9_\-]{16,}) | HIGH

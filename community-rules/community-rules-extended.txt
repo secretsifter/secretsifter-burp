@@ -1,0 +1,161 @@
+# SecretSifter Community Rules — Extended
+# Format: RuleName | regex | severity
+#
+# Includes context-gated, generic, and lower-confidence patterns.
+#
+# WARNING: Higher false positive rate than the Standard file.
+#          Recommended for: FULL tier scans, bug bounty, deep audits.
+#          Review findings before reporting — some patterns require context to confirm.
+#          Import Standard file first, then this file, or import this file alone for maximum coverage.
+#
+# Version: 1.1.0
+#
+# HOW TO USE:
+#   Settings → Custom Rules → Import from file → select this file → Save Settings
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — ADDITIONAL VENDOR TOKENS (anchored, medium-confidence)
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ── ANALYTICS & DATA ───────────────────────────────────────────────────────────
+
+MixpanelApiKey | (?i)(?:mixpanel)[^a-z0-9]{0,10}([a-f0-9]{32}) | MEDIUM
+AmplitudeApiKey | (?i)(?:amplitude)[^a-z0-9]{0,10}([a-f0-9]{32}) | MEDIUM
+SegmentWriteKey | (?i)(?:segment)[^a-z0-9]{0,10}([a-zA-Z0-9]{20,40}) | MEDIUM
+FullstoryApiKey | (?i)(?:fullstory)[^a-z0-9]{0,10}([a-zA-Z0-9_\-]{20,40}) | MEDIUM
+HeapAnalyticsId | \bHeap\.load\(['"][0-9]{9,10}['"]\) | INFORMATION
+LogRocketAppId | (?i)logrocket\.init\(['"][a-zA-Z0-9/\-]{10,30}['"]\) | INFORMATION
+
+# ── PAYMENT & FINTECH ──────────────────────────────────────────────────────────
+
+BraintreeAccessToken | \baccess_token\$[a-z]{10,12}\$[a-f0-9]{16,32}\$[a-f0-9]{32}\b | HIGH
+PaypalClientId | (?i)paypal[^a-z0-9]{0,10}(?:client.?id)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,80}) | MEDIUM
+PaypalClientSecret | (?i)paypal[^a-z0-9]{0,10}(?:client.?secret)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{20,80}) | HIGH
+PlaidApiKey | (?i)plaid[^a-z0-9]{0,10}([a-z0-9]{30,40}) | MEDIUM
+RazorpayKeyId | \brzp_(?:live|test)_[A-Za-z0-9]{14}\b | HIGH
+RazorpaySecretKey | (?i)razorpay[^a-z0-9]{0,10}secret[^a-z0-9]{0,10}([a-zA-Z0-9]{20,40}) | HIGH
+WiseApiToken | (?i)wise[^a-z0-9]{0,10}(?:api.?key|token)[^a-z0-9]{0,10}([a-zA-Z0-9\-_]{36,50}) | HIGH
+
+# ── CRM & SALES ────────────────────────────────────────────────────────────────
+
+SalesforceAccessToken | \b00D[A-Za-z0-9]{15}![A-Za-z0-9._\-]{80,}\b | HIGH
+FreshdeskApiKey | (?i)freshdesk[^a-z0-9]{0,10}([a-zA-Z0-9]{20}) | MEDIUM
+IntercomApiKey | (?i)intercom[^a-z0-9]{0,10}([a-zA-Z0-9_\-]{40,60}) | MEDIUM
+HubspotOAuthToken | \bpat-eu-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b | HIGH
+ZendeskApiToken | (?i)zendesk[^a-z0-9]{0,10}([a-zA-Z0-9]{40,}) | MEDIUM
+PipedriveApiToken | (?i)pipedrive[^a-z0-9]{0,10}([a-f0-9]{40}) | MEDIUM
+
+# ── CLOUD STORAGE & CDN ────────────────────────────────────────────────────────
+
+AzureStorageAccountKey | (?:[A-Za-z0-9+/]{86}==) | LOW
+CloudinaryUrl | cloudinary://[0-9]+:[A-Za-z0-9_\-]+@[a-z0-9]+ | HIGH
+FirebaseApiKey | \bAIza[0-9A-Za-z_\-]{35}\b | HIGH
+BackblazeB2AppKey | \b[A-Za-z0-9]{31}\b | LOW
+WasabiAccessKey | (?i)wasabi[^a-z0-9]{0,10}([A-Z0-9]{20}) | MEDIUM
+
+# ── SOCIAL MEDIA & IDENTITY ────────────────────────────────────────────────────
+
+TwitterApiKey | (?i)twitter[^a-z0-9]{0,10}(?:api.?key|consumer.?key)[^a-z0-9]{0,10}([A-Za-z0-9]{25}) | MEDIUM
+TwitterApiSecret | (?i)twitter[^a-z0-9]{0,10}(?:api.?secret|consumer.?secret)[^a-z0-9]{0,10}([A-Za-z0-9]{50}) | HIGH
+TwitterAccessToken | (?i)twitter[^a-z0-9]{0,10}access.?token[^a-z0-9]{0,10}([0-9]{15,20}-[A-Za-z0-9]{40,50}) | HIGH
+LinkedInClientId | (?i)linkedin[^a-z0-9]{0,10}(?:client.?id)[^a-z0-9]{0,10}([a-z0-9]{12}) | MEDIUM
+LinkedInClientSecret | (?i)linkedin[^a-z0-9]{0,10}(?:client.?secret)[^a-z0-9]{0,10}([A-Za-z0-9]{16}) | HIGH
+PinterestAccessToken | (?i)pinterest[^a-z0-9]{0,10}([a-zA-Z0-9_\-]{32,50}) | MEDIUM
+
+# ── CI/CD & BUILD TOOLS ────────────────────────────────────────────────────────
+
+BuildkiteApiToken | \bbkua_[a-zA-Z0-9_\-]{40}\b | HIGH
+SemaphoreApiToken | (?i)semaphore[^a-z0-9]{0,10}([a-zA-Z0-9_\-]{20,40}) | MEDIUM
+JenkinsApiToken | (?i)jenkins[^a-z0-9]{0,10}(?:api.?token)[^a-z0-9]{0,10}([a-f0-9]{34}) | HIGH
+GiteaApiToken | (?i)gitea[^a-z0-9]{0,10}([a-f0-9]{40}) | MEDIUM
+
+# ── COMMUNICATION APIS ─────────────────────────────────────────────────────────
+
+TwilioAuthToken | (?i)twilio[^a-z0-9]{0,10}auth.?token[^a-z0-9]{0,10}([a-f0-9]{32}) | HIGH
+VonageApiKey | (?i)(?:nexmo|vonage)[^a-z0-9]{0,10}([a-f0-9]{8}) | MEDIUM
+VonageApiSecret | (?i)(?:nexmo|vonage)[^a-z0-9]{0,10}secret[^a-z0-9]{0,10}([a-zA-Z0-9]{16}) | HIGH
+PushoverApiToken | \b[a-z0-9]{30}\b | LOW
+TelnyxApiKey | \bKEY[a-zA-Z0-9_\-]{40,}\b | HIGH
+SignalwireToken | (?i)signalwire[^a-z0-9]{0,10}([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}) | HIGH
+
+# ── ECOMMERCE ──────────────────────────────────────────────────────────────────
+
+WooCommerceConsumerKey | \bck_[a-f0-9]{40}\b | HIGH
+WooCommerceConsumerSecret | \bcs_[a-f0-9]{40}\b | HIGH
+BigCommerceApiKey | (?i)bigcommerce[^a-z0-9]{0,10}([a-zA-Z0-9_\-]{40,64}) | MEDIUM
+MagentoApiToken | (?i)magento[^a-z0-9]{0,10}([a-zA-Z0-9]{32}) | MEDIUM
+EtsyApiKey | (?i)etsy[^a-z0-9]{0,10}(?:api.?key|keystring)[^a-z0-9]{0,10}([a-zA-Z0-9]{24}) | HIGH
+
+# ── MAPPING & LOCATION ─────────────────────────────────────────────────────────
+
+HereApiKey | \b[A-Za-z0-9_\-]{43}\b | LOW
+TomTomApiKey | (?i)tomtom[^a-z0-9]{0,10}([a-zA-Z0-9]{32}) | MEDIUM
+MapquestApiKey | (?i)mapquest[^a-z0-9]{0,10}([a-zA-Z0-9]{32}) | MEDIUM
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — CHINESE ECOSYSTEM
+# ════════════════════════════════════════════════════════════════════════════════
+
+AlibabaClouAccessKeyId | \bLTAI[A-Za-z0-9]{12,20}\b | HIGH
+AliyunAccessKeySecret | (?i)aliyun[^a-z0-9]{0,10}([A-Za-z0-9]{30}) | HIGH
+WeComCorpId | \bww[a-f0-9]{16}\b | HIGH
+WeComAppSecret | (?i)wework[^a-z0-9]{0,10}(?:app.?secret|secret)[^a-z0-9]{0,10}([A-Za-z0-9_\-]{40,50}) | HIGH
+TencentSecretId | \bAKID[A-Za-z0-9]{32}\b | HIGH
+TencentSecretKey | (?i)tencent[^a-z0-9]{0,10}secret.?key[^a-z0-9]{0,10}([A-Za-z0-9]{32}) | HIGH
+BaiduAiApiKey | (?i)baidu[^a-z0-9]{0,10}(?:api.?key)[^a-z0-9]{0,10}([a-zA-Z0-9]{32}) | HIGH
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — GENERIC CONTEXT-GATED PATTERNS (higher FP — review all findings)
+# ════════════════════════════════════════════════════════════════════════════════
+
+# These patterns require a keyword context to reduce FP.
+# They will catch secrets missed by anchored rules but will also produce more noise.
+
+GenericPasswordInConfig | (?i)(?:password|passwd|pwd)\s*[=:]\s*['"][^'"]{8,}['"] | MEDIUM
+GenericSecretInConfig | (?i)(?:secret|private_key|client_secret)\s*[=:]\s*['"][^'"]{12,}['"] | HIGH
+GenericApiKeyInConfig | (?i)(?:api[_\-]?key|apikey)\s*[=:]\s*['"][^'"]{16,}['"] | MEDIUM
+GenericTokenInConfig | (?i)(?:access[_\-]?token|auth[_\-]?token)\s*[=:]\s*['"][^'"]{16,}['"] | MEDIUM
+GenericBearerInHeader | (?i)Authorization:\s*Bearer\s+([A-Za-z0-9_\-\.]{20,}) | MEDIUM
+GenericBasicAuthHeader | (?i)Authorization:\s*Basic\s+([A-Za-z0-9+/]{20,}={0,2}) | MEDIUM
+GenericPrivateKeyHeader | (?i)(?:X-API-Key|X-Auth-Token|X-Access-Token|X-Secret-Key):\s*([A-Za-z0-9_\-]{16,}) | MEDIUM
+GenericSecretInEnvVar | (?i)(?:SECRET|KEY|TOKEN|PASSWORD|CREDENTIAL)[_A-Z]*\s*=\s*['"]?[A-Za-z0-9_\-+/]{16,}['"]? | LOW
+
+# ── CREDENTIAL PATTERNS ────────────────────────────────────────────────────────
+
+HardcodedBasicAuth | https?://[A-Za-z0-9_\-]+:[A-Za-z0-9_\-!@#$%^&*]{6,}@[a-zA-Z0-9.\-]+ | HIGH
+S3BucketWithCredentials | s3://[A-Za-z0-9_\-]+:[A-Za-z0-9_\-+/]{20,}@[a-zA-Z0-9.\-]+ | HIGH
+JdbcWithPassword | jdbc:[a-z]+://[^@]+:[^@]{8,}@[a-zA-Z0-9.\-]+ | HIGH
+MongoDbConnectionString | mongodb(?:\+srv)?://[A-Za-z0-9_\-]+:[^@]{8,}@[a-zA-Z0-9.\-:,/?]+ | HIGH
+RedisConnectionString | redis(?:s)?://:[^@]{8,}@[a-zA-Z0-9.\-:]+ | HIGH
+PostgresConnectionString | postgres(?:ql)?://[A-Za-z0-9_\-]+:[^@]{8,}@[a-zA-Z0-9.\-:]+ | HIGH
+MySqlConnectionString | mysql://[A-Za-z0-9_\-]+:[^@]{8,}@[a-zA-Z0-9.\-:]+ | HIGH
+
+# ── INFRASTRUCTURE SECRETS ─────────────────────────────────────────────────────
+
+KubernetesSecretBase64 | (?i)(?:password|token|secret|key):\s+([A-Za-z0-9+/]{20,}={0,2}) | MEDIUM
+DockerRegistryAuth | \\"auth\\":\s*\\"[A-Za-z0-9+/]{20,}={0,2}\\" | MEDIUM
+TerraformStateSecret | (?i)(?:sensitive|secret|password)\s*=\s*"[^"]{8,}" | MEDIUM
+AnsibleVaultHeader | \$ANSIBLE_VAULT;[0-9]+\.[0-9]+;AES256 | INFORMATION
+
+# ── SOURCE CODE PATTERNS ───────────────────────────────────────────────────────
+
+InlineHardcodedPassword | (?i)(?:password|passwd)\s*=\s*"[^"]{8,}" | MEDIUM
+InlineHardcodedSecret | (?i)(?:secret|api_secret)\s*=\s*"[^"]{12,}" | HIGH
+InlineHardcodedApiKey | (?i)(?:api_key|apiKey)\s*=\s*"[^"]{16,}" | MEDIUM
+JavaPropertiesSecret | (?i)(?:password|secret|api.key|token)\s*=\s*(?!.*\$\{)[A-Za-z0-9_\-@!#]{8,} | MEDIUM
+DotEnvSecret | (?i)^(?:SECRET|PASSWORD|TOKEN|KEY|APIKEY|API_KEY)[_A-Z]*=(?!.*\$\{)[A-Za-z0-9_\-+/!@#]{12,} | HIGH
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — STRUCTURAL FINDINGS (INFORMATION severity — not credentials)
+# ════════════════════════════════════════════════════════════════════════════════
+
+SwaggerUiExposed | swagger-ui\.html | INFORMATION
+GraphiQLExposed | /graphiql | INFORMATION
+SpringActuatorExposed | /actuator/(?:env|beans|mappings|heapdump|threaddump) | INFORMATION
+SourceMapReference | \/\/[#@]\s*sourceMappingURL=.*\.map | INFORMATION
+NodeDebugPort | --inspect(?:-brk)?=0\.0\.0\.0 | INFORMATION
+PrivateIpInResponse | \b(?:10\.[0-9]{1,3}\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)[0-9]{1,3}\.[0-9]{1,3}\b | INFORMATION
+InternalHostname | \b[a-z0-9\-]+\.(?:internal|corp|local|lan|intranet|int)\b | INFORMATION
+StackTraceJava | at [a-zA-Z0-9_$.]+\([A-Za-z0-9_$.]+\.java:[0-9]+\) | INFORMATION
+StackTracePython | File ".*\.py", line [0-9]+ | INFORMATION
+DebugModeEnabled | (?i)(?:debug|development)\s*[=:]\s*(?:true|1|yes|on) | INFORMATION
