@@ -1818,6 +1818,12 @@ public class SecretScanner {
         //       are very likely schema field names or enum values, not real secrets.
         //       Cap raised to 32 to cover patterns like SystemNotificationEvents123 (29 chars).
         if (v.matches("[A-Za-z_]+")) return false;   // (a) all alpha / underscore, any length
+        // i18n / NLS label strings: 2+ non-ASCII codepoints mean a localised UI string, never a credential
+        if (v.chars().filter(c -> c > 127).count() >= 2) return false;
+        // Form-field required markers: all-letter value (including extended Latin) with optional
+        // trailing asterisk, no digits — e.g. "Certifikatadgangskode*", "Certifikatlösenord*".
+        // Real credentials always contain at least one digit.
+        if (!v.matches(".*\\d.*") && v.matches("[\\p{L}]{4,}\\*?")) return false;
         // (b) short alphanumeric identifiers — but exempt all-hex strings (APIM keys, MD5 hashes,
         //     subscription keys) which are always credential values, never schema field names.
         if (!v.matches("[a-fA-F0-9]+") && v.matches("[A-Za-z_][A-Za-z0-9_]*") && v.length() <= 32) {

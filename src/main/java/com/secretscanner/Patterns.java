@@ -469,6 +469,18 @@ public final class Patterns {
             "[\\[\"']{1,2}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-" +
             "[0-9a-f]{4}-[0-9a-f]{12})[\"'\\]]{1,2}");
 
+    // X.509 certificate thumbprint — SHA-1 fingerprint (40 hex chars), public by design.
+    // Exposes which certificates are in use for signing/TLS; useful recon info.
+    public static final Pattern CERT_THUMBPRINT         = Pattern.compile(
+            "(?i)\\bthumbprint\\s*[:=]\\s*[\"']?([0-9A-Fa-f]{40})[\"']?");
+
+    // Vault secret reference ID — keys named *SecretId / *PasswordSecretId with a UUID value.
+    // These are pointers to where credentials are stored (Azure Key Vault, CyberArk, etc.),
+    // not credentials themselves. Exposes vault topology and secret naming conventions.
+    public static final Pattern VAULT_SECRET_REF        = Pattern.compile(
+            "(?i)\\b[A-Za-z]{0,20}(?:secret|password)[A-Za-z]{0,20}Id\\s*[:=]\\s*[\"']?" +
+            "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[\"']?");
+
     // Twitch stream key — live_{8-12 digit accountId}_{30-36 alnum}
     public static final Pattern TWITCH_STREAM_KEY       = Pattern.compile("\\blive_\\d{8,12}_[A-Za-z0-9]{30,36}\\b");
 
@@ -633,7 +645,7 @@ public final class Patterns {
             "|(?i)^.+(?:msg|errormsg|regex|pattern|policy|caption|hint|domain|url|uri|host|path|endpoint|baseurl|homepage|website)$" +
             // Keys whose suffix indicates a type discriminator, error label, or state enum — never credential holders
             // e.g., CredentialType, TokenError, KeyState, SecretKind
-            "|(?i)^.+(?:type|error|state|kind)$" +
+            "|(?i)^.+(?:type|error|state|kind|thumbprint)$" +
             // Angular/webpack bundle chunk manifest keys: file-path-derived keys mapping to build content hashes.
             // e.g. src_app_modules_news-resource-center_newsresourcecenter_module_ts
             "|(?i)^.+[_-](?:module|component|service|directive|pipe|guard|resolver|interceptor|factory|effect|reducer)[_-](?:ts|js)$");
@@ -1429,6 +1441,8 @@ public final class Patterns {
 
             // GCP OAuth2 client secret — GOCSPX- prefix; distinct from the short-lived ya29. access token
             new AnchoredRule(GCP_CLIENT_SECRET,    "gcp_client_secret",      "GCP_KEY_004",       "GCP OAuth2 Client Secret",          "HIGH"),
-            new AnchoredRule(OAUTH_RESOURCE_ID,    "oauth_resource_id",      "OAUTH_KEY_001",     "OAuth2/OIDC Resource ID Disclosure", "INFORMATION")
+            new AnchoredRule(OAUTH_RESOURCE_ID,    "oauth_resource_id",      "OAUTH_KEY_001",     "OAuth2/OIDC Resource ID Disclosure", "INFORMATION"),
+            new AnchoredRule(CERT_THUMBPRINT,      "cert_thumbprint",        "CERT_KEY_001",      "X.509 Certificate Thumbprint",       "INFORMATION"),
+            new AnchoredRule(VAULT_SECRET_REF,     "vault_secret_ref_id",    "VAULT_KEY_001",     "Vault Secret Reference ID",          "INFORMATION")
     );
 }
