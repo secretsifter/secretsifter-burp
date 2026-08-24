@@ -1,0 +1,29 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Copyright (c) 2026 Hemanth Gorijala (ORCID 0009-0006-9810-4001)
+
+These de-identified release artifacts for the study "Secrets That Survive
+Everything" are licensed under the Creative Commons Attribution 4.0
+International License (CC BY 4.0).
+
+You are free to:
+  - Share  — copy and redistribute the material in any medium or format
+  - Adapt  — remix, transform, and build upon the material for any purpose,
+             even commercially
+
+Under the following terms:
+  - Attribution — You must give appropriate credit, provide a link to the
+    license, and indicate if changes were made. You may do so in any
+    reasonable manner, but not in any way that suggests the licensor endorses
+    you or your use.
+
+No warranties are given. The license may not give you all of the permissions
+necessary for your intended use.
+
+Full legal code: https://creativecommons.org/licenses/by/4.0/legalcode
+Human-readable summary: https://creativecommons.org/licenses/by/4.0/
+
+Suggested citation:
+  H. Gorijala, "Secrets That Survive Everything — de-identified detection
+  matrix and replication artifacts," 2026. Zenodo. DOI: <add version DOI after upload>
+  (concept DOI: 10.5281/zenodo.19464445)

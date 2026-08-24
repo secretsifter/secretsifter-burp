@@ -1,0 +1,34 @@
+# Six-rule overlay applied identically to the four rule-extensible scanners
+# (TruffleHog, SecretFinder, Titus, JSluice) in the benchmark evaluation.
+#
+# These rules cover the credential shapes most prevalent in the corpus and were
+# selected without consulting any tool's output. They are not a comprehensive
+# coverage set; they are a minimal corpus-targeted overlay applied uniformly to
+# all four tools so the comparison reflects scanner-architecture differences
+# rather than rule-library differences. No per-tool tuning was performed.
+#
+# Reproduced verbatim from Appendix C of the companion study. See README.md.
+
+- id: custom.azure.client_id
+  name: Azure AD Client ID (UUID v4)
+  pattern: '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+
+- id: custom.azure.ad_secret
+  name: Azure AD Client Secret (tilde-format, 34-40 char)
+  pattern: '\b[A-Za-z0-9_.\-]{1,16}~[A-Za-z0-9_.\-~]{16,40}\b'
+
+- id: custom.azure.apim_key
+  name: Azure APIM Subscription Key (32-hex)
+  pattern: '\b[0-9a-f]{32}\b'
+
+- id: custom.jwt.token
+  name: JSON Web Token (eyJ-prefix three-segment)
+  pattern: '\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9._\-]{10,}\.[A-Za-z0-9._\-]+'
+
+- id: custom.azure.app_insights_ikey
+  name: App Insights Instrumentation Key
+  pattern: 'InstrumentationKey=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+- id: custom.cryptojs.salted
+  name: CryptoJS U2FsdGVkX1-prefix encrypted blob
+  pattern: 'U2FsdGVkX1[A-Za-z0-9+/=]{16,}'
