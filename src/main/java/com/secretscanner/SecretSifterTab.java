@@ -67,6 +67,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
 
         // Last-response cache — avoids re-scanning on tab switches
         private String       lastHash     = "";
+        private volatile long scanGeneration = 0;   // latest selection wins
         private HttpResponse lastResponse = null;
 
         FindingsEditor(SecretScanner scanner, Logging logging) {
@@ -83,7 +84,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
             table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
 
             // Column widths
-            table.getColumnModel().getColumn(0).setPreferredWidth(40);   // #
+            table.getColumnModel().getColumn(0).setPreferredWidth(135);  // Issue ID
             table.getColumnModel().getColumn(1).setPreferredWidth(80);   // Severity
             table.getColumnModel().getColumn(2).setPreferredWidth(70);   // Confidence
             table.getColumnModel().getColumn(3).setPreferredWidth(160);  // Rule ID
@@ -138,7 +139,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
             panel = new JPanel(new BorderLayout(0, 4));
             panel.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
             panel.add(toolbar, BorderLayout.NORTH);
-            panel.add(new JScrollPane(table), BorderLayout.CENTER);
+            panel.add(Branding.watermarkInBox(new JScrollPane(table)), BorderLayout.CENTER);
             panel.add(statusLabel, BorderLayout.SOUTH);
         }
 
@@ -188,11 +189,10 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
             if (!file.getName().toLowerCase().endsWith(".csv"))
                 file = new File(file.getPath() + ".csv");
             try (PrintWriter pw = new PrintWriter(file, StandardCharsets.UTF_8)) {
-                pw.println("#,Severity,Confidence,Rule ID,Key / Field,Matched Value,Line,URL");
-                int n = 1;
+                pw.println("Issue ID,Occurrence,Severity,Confidence,Rule ID,Key / Field,Matched Value,Line,URL");
                 for (SecretFinding f : findings) {
-                    pw.printf("%d,%s,%s,%s,%s,%s,%d,%s%n",
-                            n++,
+                    pw.printf("%s,%s,%s,%s,%s,%s,%s,%d,%s%n",
+                            f.issueId(), f.occurrenceRef(),
                             csvEscape(f.severity()),
                             csvEscape(f.confidence()),
                             csvEscape(f.ruleId()),
@@ -238,6 +238,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
 
         private static String csvEscape(String s) {
             if (s == null) return "";
+            s = BulkScanPanel.neutralizeFormula(s);
             if (s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r"))
                 return "\"" + s.replace("\"", "\"\"") + "\"";
             return s;
@@ -278,11 +279,12 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
             String ct   = rr.response().headerValue("Content-Type");
             String url  = rr.request() != null ? rr.request().url() : "";
 
-            // Lightweight hash — skip re-scan if same response
-            String hash = url + ":" + body.length() + ":" +
-                    (body.length() > 8 ? body.substring(0, 8) : body);
+            // Skip a re-scan only for the identical response (a resent request with a rotated token
+            // of the same length is a different response)
+            String hash = url + ":" + body.length() + ":" + body.hashCode();
             if (hash.equals(lastHash)) return;
             lastHash = hash;
+            final long generation = ++scanGeneration;
 
             Thread t = new Thread(() -> {
                 SwingUtilities.invokeLater(() -> {
@@ -299,6 +301,8 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
                 }
                 final List<SecretFinding> result = findings;
                 SwingUtilities.invokeLater(() -> {
+                    // a slower scan of an earlier selection must not overwrite the current one
+                    if (generation != scanGeneration) return;
                     model.setFindings(result);
                     boolean hasCustom = result.stream()
                             .anyMatch(f -> f.ruleId().startsWith("CUSTOM_"));
@@ -342,7 +346,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
     private static class FindingsModel extends AbstractTableModel {
 
         private static final String[] COLS =
-                {"#", "Severity", "Confidence", "Rule ID", "Key / Field", "Matched Value", "Line"};
+                {"Issue ID", "Severity", "Confidence", "Rule ID", "Key / Field", "Matched Value", "Line"};
 
         private final List<SecretFinding> rows = new ArrayList<>();
 
@@ -392,7 +396,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
         public Object getValueAt(int row, int col) {
             SecretFinding f = rows.get(row);
             return switch (col) {
-                case 0 -> row + 1;
+                case 0 -> f.issueId();
                 case 1 -> f.severity();
                 case 2 -> f.confidence();
                 case 3 -> f.ruleId();

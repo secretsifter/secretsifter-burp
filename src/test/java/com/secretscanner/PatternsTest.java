@@ -41,15 +41,15 @@ class PatternsTest {
     @Nested @DisplayName("GitHub tokens")
     class GitHub {
 
-        @Test void ghp_classic_match()   { assertMatches(Patterns.GITHUB_PAT_CLASSIC, "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"); }
-        @Test void ghp_classic_noMatch() { assertNoMatch(Patterns.GITHUB_PAT_CLASSIC, "ghp_SHORT"); }
+        @Test void ghp_classic_match()   { assertMatches(Patterns.rulePattern("GITHUB_PAT_001"), "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"); }
+        @Test void ghp_classic_noMatch() { assertNoMatch(Patterns.rulePattern("GITHUB_PAT_001"), "ghp_SHORT"); }
 
-        @Test void gho_oauth_match()     { assertMatches(Patterns.GITHUB_OAUTH,       "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"); }
-        @Test void ghs_actions_match()   { assertMatches(Patterns.GITHUB_ACTIONS,     "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"); }
-        @Test void ghr_refresh_match()   { assertMatches(Patterns.GITHUB_REFRESH,     "ghr_" + "A".repeat(76)); }
+        @Test void gho_oauth_match()     { assertMatches(Patterns.rulePattern("GITHUB_PAT_002"),       "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"); }
+        @Test void ghs_actions_match()   { assertMatches(Patterns.rulePattern("GITHUB_PAT_003"),     "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"); }
+        @Test void ghr_refresh_match()   { assertMatches(Patterns.rulePattern("GITHUB_PAT_004"),     "ghr_" + "A".repeat(76)); }
 
-        @Test void fine_pat_match()      { assertMatches(Patterns.GITHUB_FINE_PAT,    "github_pat_" + "A".repeat(82)); }
-        @Test void fine_pat_noMatch()    { assertNoMatch(Patterns.GITHUB_FINE_PAT,    "github_pat_SHORT"); }
+        @Test void fine_pat_match()      { assertMatches(Patterns.rulePattern("GITHUB_PAT_005"),    "github_pat_" + "A".repeat(82)); }
+        @Test void fine_pat_noMatch()    { assertNoMatch(Patterns.rulePattern("GITHUB_PAT_005"),    "github_pat_SHORT"); }
     }
 
     // =========================================================================
@@ -58,9 +58,9 @@ class PatternsTest {
 
     @Nested @DisplayName("GitLab tokens")
     class GitLab {
-        @Test void pat_match()    { assertMatches(Patterns.GITLAB_PAT,    "glpat-ABCDEFGHIJabcdefghij"); }
-        @Test void pat_noMatch()  { assertNoMatch(Patterns.GITLAB_PAT,    "glpat-SHORT"); }
-        @Test void deploy_match() { assertMatches(Patterns.GITLAB_DEPLOY, "gldt-ABCDEFGHIJabcdefghij"); }
+        @Test void pat_match()    { assertMatches(Patterns.rulePattern("GITLAB_PAT_001"),    "glpat-ABCDEFGHIJabcdefghij"); }
+        @Test void pat_noMatch()  { assertNoMatch(Patterns.rulePattern("GITLAB_PAT_001"),    "glpat-SHORT"); }
+        @Test void deploy_match() { assertMatches(Patterns.rulePattern("GITLAB_PAT_002"), "gldt-ABCDEFGHIJabcdefghij"); }
     }
 
     // =========================================================================
@@ -69,8 +69,8 @@ class PatternsTest {
 
     @Nested @DisplayName("npm token")
     class Npm {
-        @Test void match()   { assertMatches(Patterns.NPM_TOKEN, "npm_ABCDEFGHIJabcdefghij0123456789abcdef"); }
-        @Test void noMatch() { assertNoMatch(Patterns.NPM_TOKEN, "npm_SHORT"); }
+        @Test void match()   { assertMatches(Patterns.rulePattern("NPM_TOKEN_001"), "npm_ABCDEFGHIJabcdefghij0123456789abcdef"); }
+        @Test void noMatch() { assertNoMatch(Patterns.rulePattern("NPM_TOKEN_001"), "npm_SHORT"); }
     }
 
     // =========================================================================
@@ -79,10 +79,10 @@ class PatternsTest {
 
     @Nested @DisplayName("Slack tokens")
     class Slack {
-        @Test void bot_match()     { assertMatches(Patterns.SLACK_BOT,    "xoxb-1234567890-1234567890-ABCDEFabcdefABCDEFabcdef"); }
-        @Test void user_match()    { assertMatches(Patterns.SLACK_USER,   "xoxp-1234567890-1234567890-1234567890-ABCDEFabcdefABCDEFabcdefABCDEFab"); }
-        @Test void app_match()     { assertMatches(Patterns.SLACK_APP,    "xapp-1-ABCDEFGHIJabcdefghij0123"); }
-        @Test void webhook_match() { assertMatches(Patterns.SLACK_WEBHOOK,"https://hooks.slack.com/services/TABCDEFGH/BABCDEFGH/ABCDEFGHIJabcdefghijABCD"); }
+        @Test void bot_match()     { assertMatches(Patterns.rulePattern("SLACK_TOKEN_001"),    "xoxb-1234567890-1234567890-ABCDEFabcdefABCDEFabcdef"); }
+        @Test void user_match()    { assertMatches(Patterns.rulePattern("SLACK_TOKEN_002"),   "xoxp-1234567890-1234567890-1234567890-ABCDEFabcdefABCDEFabcdefABCDEFab"); }
+        @Test void app_match()     { assertMatches(Patterns.rulePattern("SLACK_TOKEN_003"),    "xapp-1-A0123456789-1234567890123-" + "ab12".repeat(16)); }
+        @Test void webhook_match() { assertMatches(Patterns.rulePattern("SLACK_TOKEN_005"),"https://hooks.slack.com/services/TABCDEFGH/BABCDEFGH/ABCDEFGHIJabcdefghijABCD"); }
     }
 
     // =========================================================================
@@ -91,12 +91,12 @@ class PatternsTest {
 
     @Nested @DisplayName("Stripe keys")
     class Stripe {
-        @Test void live_match()    { assertMatches(Patterns.STRIPE_SECRET_LIVE,   "sk_live_ABCDEFGHIJabcdefghij0123456"); }
-        @Test void test_match()    { assertMatches(Patterns.STRIPE_SECRET_TEST,   "sk_test_ABCDEFGHIJabcdefghij0123456"); }
-        @Test void restricted()    { assertMatches(Patterns.STRIPE_RESTRICTED,    "rk_live_ABCDEFGHIJabcdefghij0123456"); }
-        @Test void pk_live_match() { assertMatches(Patterns.STRIPE_PK_LIVE,       "pk_live_ABCDEFGHIJabcdefghij0123456"); }
-        @Test void webhook_match() { assertMatches(Patterns.STRIPE_WEBHOOK_SECRET,"whsec_ABCDEFGHIJabcdefghij01234567890123456789"); }
-        @Test void webhook_noMatch(){ assertNoMatch(Patterns.STRIPE_WEBHOOK_SECRET,"whsec_SHORT"); }
+        @Test void live_match()    { assertMatches(Patterns.rulePattern("STRIPE_KEY_001"),   "sk_live_ABCDEFGHIJabcdefghij0123456"); }
+        @Test void test_match()    { assertMatches(Patterns.rulePattern("STRIPE_KEY_002"),   "sk_test_ABCDEFGHIJabcdefghij0123456"); }
+        @Test void restricted()    { assertMatches(Patterns.rulePattern("STRIPE_KEY_003"),    "rk_live_ABCDEFGHIJabcdefghij0123456"); }
+        @Test void pk_live_match() { assertMatches(Patterns.rulePattern("STRIPE_KEY_004"),       "pk_live_ABCDEFGHIJabcdefghij0123456"); }
+        @Test void webhook_match() { assertMatches(Patterns.rulePattern("STRIPE_KEY_005"),"whsec_ABCDEFGHIJabcdefghij01234567890123456789"); }
+        @Test void webhook_noMatch(){ assertNoMatch(Patterns.rulePattern("STRIPE_KEY_005"),"whsec_SHORT"); }
     }
 
     // =========================================================================
@@ -105,10 +105,10 @@ class PatternsTest {
 
     @Nested @DisplayName("AWS keys")
     class Aws {
-        @Test void access_key_akia()  { assertMatches(Patterns.AWS_ACCESS_KEY, "AKIAIOSFODNN7EXAMPLE"); }
-        @Test void access_key_asia()  { assertMatches(Patterns.AWS_ACCESS_KEY, "ASIAIOSFODNN7EXAMPLE"); }
-        @Test void access_key_bad()   { assertNoMatch(Patterns.AWS_ACCESS_KEY, "BKIAIOSFODNN7EXAMPLE"); }
-        @Test void access_key_short() { assertNoMatch(Patterns.AWS_ACCESS_KEY, "AKIA1234"); }
+        @Test void access_key_akia()  { assertMatches(Patterns.rulePattern("AWS_KEY_001"), "AKIAIOSFODNN7EXAMPLE"); }
+        @Test void access_key_asia()  { assertMatches(Patterns.rulePattern("AWS_KEY_001"), "ASIAIOSFODNN7EXAMPLE"); }
+        @Test void access_key_bad()   { assertNoMatch(Patterns.rulePattern("AWS_KEY_001"), "BKIAIOSFODNN7EXAMPLE"); }
+        @Test void access_key_short() { assertNoMatch(Patterns.rulePattern("AWS_KEY_001"), "AKIA1234"); }
     }
 
     // =========================================================================
@@ -117,10 +117,9 @@ class PatternsTest {
 
     @Nested @DisplayName("Google keys")
     class Google {
-        // Test fixtures are obviously synthetic (sequential alphabet + digits) so they can't be misread as real keys.
-        @Test void api_key_match()     { assertMatches(Patterns.GOOGLE_KEY,           "AIza" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"); }
-        @Test void api_key_noMatch()   { assertNoMatch(Patterns.GOOGLE_KEY,           "AIzaSHORT"); }
-        @Test void oauth_client_match(){ assertMatches(Patterns.GOOGLE_OAUTH_CLIENT_ID,"123456789012-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com"); }
+        @Test void api_key_match()     { assertMatches(Patterns.rulePattern("GOOGLE_KEY_001"),           "AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"); }
+        @Test void api_key_noMatch()   { assertNoMatch(Patterns.rulePattern("GOOGLE_KEY_001"),           "AIzaSHORT"); }
+        @Test void oauth_client_match(){ assertMatches(Patterns.rulePattern("GOOGLE_KEY_002"),"123456789012-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com"); }
     }
 
     // =========================================================================
@@ -129,14 +128,14 @@ class PatternsTest {
 
     @Nested @DisplayName("AI API keys")
     class AiKeys {
-        @Test void openai_match()    { assertMatches(Patterns.OPENAI_KEY,    "sk-" + "A".repeat(48)); }
-        @Test void openai_noMatch()  { assertNoMatch(Patterns.OPENAI_KEY,    "sk-SHORT"); }
-        @Test void openai_proj()     { assertMatches(Patterns.OPENAI_PROJECT,"sk-proj-" + "A".repeat(48)); }
-        @Test void anthropic_match() { assertMatches(Patterns.ANTHROPIC_KEY, "sk-ant-api01-" + "A".repeat(93)); }
-        @Test void groq_match()      { assertMatches(Patterns.GROQ_API_KEY,  "gsk_" + "A".repeat(52)); }
-        @Test void groq_noMatch()    { assertNoMatch(Patterns.GROQ_API_KEY,  "gsk_SHORT"); }
-        @Test void xai_match()       { assertMatches(Patterns.XAI_API_KEY,   "xai-" + "A".repeat(80)); }
-        @Test void hf_match()        { assertMatches(Patterns.HUGGINGFACE_TOKEN, "hf_" + "A".repeat(34)); }
+        @Test void openai_match()    { assertMatches(Patterns.rulePattern("OPENAI_KEY_001"),    "sk-" + "A".repeat(48)); }
+        @Test void openai_noMatch()  { assertNoMatch(Patterns.rulePattern("OPENAI_KEY_001"),    "sk-SHORT"); }
+        @Test void openai_proj()     { assertMatches(Patterns.rulePattern("OPENAI_KEY_002"),"sk-proj-" + "A".repeat(48)); }
+        @Test void anthropic_match() { assertMatches(Patterns.rulePattern("ANTHROPIC_KEY_001"), "sk-ant-api01-" + "A".repeat(93)); }
+        @Test void groq_match()      { assertMatches(Patterns.rulePattern("GROQ_KEY_001"),  "gsk_" + "A".repeat(52)); }
+        @Test void groq_noMatch()    { assertNoMatch(Patterns.rulePattern("GROQ_KEY_001"),  "gsk_SHORT"); }
+        @Test void xai_match()       { assertMatches(Patterns.rulePattern("XAI_KEY_001"),   "xai-" + "A".repeat(80)); }
+        @Test void hf_match()        { assertMatches(Patterns.rulePattern("HF_KEY_001"), "hf_" + "A".repeat(34)); }
     }
 
     // =========================================================================
@@ -145,9 +144,9 @@ class PatternsTest {
 
     @Nested @DisplayName("Shopify tokens")
     class Shopify {
-        @Test void access_token() { assertMatches(Patterns.SHOPIFY_TOKEN,  "shpat_" + "a".repeat(32)); }
-        @Test void secret()       { assertMatches(Patterns.SHOPIFY_SECRET, "shpss_" + "a".repeat(32)); }
-        @Test void custom()       { assertMatches(Patterns.SHOPIFY_CUSTOM, "shpca_" + "a".repeat(32)); }
+        @Test void access_token() { assertMatches(Patterns.rulePattern("SHOPIFY_KEY_001"),  "shpat_" + "a".repeat(32)); }
+        @Test void secret()       { assertMatches(Patterns.rulePattern("SHOPIFY_KEY_002"), "shpss_" + "a".repeat(32)); }
+        @Test void custom()       { assertMatches(Patterns.rulePattern("SHOPIFY_KEY_003"), "shpca_" + "a".repeat(32)); }
     }
 
     // =========================================================================
@@ -156,10 +155,10 @@ class PatternsTest {
 
     @Nested @DisplayName("Messaging API keys")
     class Messaging {
-        @Test void sendgrid_match()   { assertMatches(Patterns.SENDGRID,       "SG." + "A".repeat(22) + "." + "A".repeat(43)); }
-        @Test void twilio_sid_match() { assertMatches(Patterns.TWILIO_SID,     "AC" + "a".repeat(32)); }
-        @Test void mailgun_match()    { assertMatches(Patterns.MAILGUN_API_KEY, "key-" + "a".repeat(32)); }
-        @Test void mailgun_noMatch()  { assertNoMatch(Patterns.MAILGUN_API_KEY, "key-SHORT"); }
+        @Test void sendgrid_match()   { assertMatches(Patterns.rulePattern("SENDGRID_KEY_001"),       "SG." + "A".repeat(22) + "." + "A".repeat(43)); }
+        @Test void twilio_sid_match() { assertMatches(Patterns.rulePattern("TWILIO_SID_001"),     "AC" + "a".repeat(32)); }
+        @Test void mailgun_match()    { assertMatches(Patterns.rulePattern("MAILGUN_KEY_001"), "key-" + "a".repeat(32)); }
+        @Test void mailgun_noMatch()  { assertNoMatch(Patterns.rulePattern("MAILGUN_KEY_001"), "key-SHORT"); }
     }
 
     // =========================================================================
@@ -170,11 +169,11 @@ class PatternsTest {
     class Pem {
         // PEM_PRIVATE_KEY requires header + newline + ≥1 base64 line (to avoid matching stub comments).
         private static final String KEY_BODY = "\nMIIEpAIBAAKCAQEA1234567890ABCDEF\n";
-        @Test void rsa_match()    { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN RSA PRIVATE KEY-----"    + KEY_BODY); }
-        @Test void ec_match()     { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN EC PRIVATE KEY-----"     + KEY_BODY); }
-        @Test void bare_match()   { assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN PRIVATE KEY-----"        + KEY_BODY); }
-        @Test void openssh_match(){ assertMatches(Patterns.PEM_PRIVATE_KEY, "-----BEGIN OPENSSH PRIVATE KEY-----" + KEY_BODY); }
-        @Test void pub_noMatch()  { assertNoMatch(Patterns.PEM_PRIVATE_KEY, "-----BEGIN PUBLIC KEY-----"); }
+        @Test void rsa_match()    { assertMatches(Patterns.rulePattern("PEM_PRIVKEY_001"), "-----BEGIN RSA PRIVATE KEY-----"    + KEY_BODY); }
+        @Test void ec_match()     { assertMatches(Patterns.rulePattern("PEM_PRIVKEY_001"), "-----BEGIN EC PRIVATE KEY-----"     + KEY_BODY); }
+        @Test void bare_match()   { assertMatches(Patterns.rulePattern("PEM_PRIVKEY_001"), "-----BEGIN PRIVATE KEY-----"        + KEY_BODY); }
+        @Test void openssh_match(){ assertMatches(Patterns.rulePattern("PEM_PRIVKEY_001"), "-----BEGIN OPENSSH PRIVATE KEY-----" + KEY_BODY); }
+        @Test void pub_noMatch()  { assertNoMatch(Patterns.rulePattern("PEM_PRIVKEY_001"), "-----BEGIN PUBLIC KEY-----"); }
     }
 
     // =========================================================================
@@ -184,13 +183,13 @@ class PatternsTest {
     @Nested @DisplayName("JWT token")
     class Jwt {
         @Test void match() {
-            assertMatches(Patterns.JWT_TOKEN,
+            assertMatches(Patterns.rulePattern("JWT_TOKEN_001"),
                     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" +
                     ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0" +
                     ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c");
         }
         @Test void noMatch_twoSegments() {
-            assertNoMatch(Patterns.JWT_TOKEN, "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0");
+            assertNoMatch(Patterns.rulePattern("JWT_TOKEN_001"), "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0");
         }
     }
 
@@ -268,24 +267,24 @@ class PatternsTest {
     @Nested @DisplayName("Additional vendor tokens")
     class Vendors {
         @Test void discord_webhook() {
-            assertMatches(Patterns.DISCORD_WEBHOOK,
+            assertMatches(Patterns.rulePattern("DISCORD_TOKEN_002"),
                     "https://discord.com/api/webhooks/123456789012345678/" + "A".repeat(68));
         }
         @Test void telegram_bot() {
-            assertMatches(Patterns.TELEGRAM_BOT_TOKEN, "1234567890:AA" + "A".repeat(33)); }
-        @Test void telegram_bad()  { assertNoMatch(Patterns.TELEGRAM_BOT_TOKEN, "12345:AAshort"); }
+            assertMatches(Patterns.rulePattern("TELEGRAM_KEY_001"), "1234567890:AA" + "A".repeat(33)); }
+        @Test void telegram_bad()  { assertNoMatch(Patterns.rulePattern("TELEGRAM_KEY_001"), "12345:AAshort"); }
 
-        @Test void databricks()    { assertMatches(Patterns.DATABRICKS,     "dapi" + "a".repeat(32)); }
-        @Test void mailchimp()     { assertMatches(Patterns.MAILCHIMP,      "a".repeat(32) + "-us12"); }
-        @Test void supabase()      { assertMatches(Patterns.SUPABASE_PAT,   "sbp_" + "a".repeat(40)); }
-        @Test void razorpay_live() { assertMatches(Patterns.RAZORPAY_LIVE,  "rzp_live_" + "A".repeat(20)); }
-        @Test void razorpay_test() { assertMatches(Patterns.RAZORPAY_TEST,  "rzp_test_" + "A".repeat(20)); }
-        @Test void okta_ssws()     { assertMatches(Patterns.OKTA_SSWS_TOKEN,"SSWS " + "A".repeat(40)); }
-        @Test void circleci()      { assertMatches(Patterns.CIRCLECI_TOKEN, "ccipat_" + "A".repeat(40)); }
-        @Test void sentry()        { assertMatches(Patterns.SENTRY_AUTH_TOKEN, "sntrys_" + "A".repeat(64)); }
-        @Test void figma()         { assertMatches(Patterns.FIGMA_TOKEN,    "figd_" + "A".repeat(43)); }
-        @Test void do_pat()        { assertMatches(Patterns.DO_ACCESS_TOKEN,"dop_v1_" + "a".repeat(64)); }
-        @Test void planetscale()   { assertMatches(Patterns.PLANETSCALE_PW, "pscale_pw_" + "A".repeat(43)); }
-        @Test void postman()       { assertMatches(Patterns.POSTMAN_API_KEY,"PMAK-" + "a".repeat(24) + "-" + "A".repeat(34)); }
+        @Test void databricks()    { assertMatches(Patterns.rulePattern("DATABRICKS_KEY_001"),     "dapi" + "a".repeat(32)); }
+        @Test void mailchimp()     { assertMatches(Patterns.rulePattern("MAILCHIMP_KEY_001"),      "a".repeat(32) + "-us12"); }
+        @Test void supabase()      { assertMatches(Patterns.rulePattern("SUPABASE_KEY_001"),   "sbp_" + "a".repeat(40)); }
+        @Test void razorpay_live() { assertMatches(Patterns.rulePattern("RAZORPAY_KEY_001"),  "rzp_live_" + "Ab1".repeat(4) + "Cd"); }
+        @Test void razorpay_test() { assertMatches(Patterns.rulePattern("RAZORPAY_KEY_002"),  "rzp_test_" + "Ab1".repeat(4) + "Cd"); }
+        @Test void okta_ssws()     { assertMatches(Patterns.rulePattern("OKTA_KEY_001"),"SSWS " + "A".repeat(40)); }
+        @Test void circleci()      { assertMatches(Patterns.rulePattern("CIRCLECI_KEY_001"), "CCIPAT_" + "Ab1".repeat(7) + "C_" + "a1b2".repeat(10)); }
+        @Test void sentry()        { assertMatches(Patterns.rulePattern("SENTRY_KEY_001"), "sntrys_eyJpYXQiOjE3MDAwMDAwMDB9" + "Ab1+".repeat(12) + "==_" + "Cd2/".repeat(10) + "Ab1"); }
+        @Test void figma()         { assertMatches(Patterns.rulePattern("FIGMA_KEY_001"),    "figd_" + "A".repeat(43)); }
+        @Test void do_pat()        { assertMatches(Patterns.rulePattern("DO_KEY_001"),"dop_v1_" + "a".repeat(64)); }
+        @Test void planetscale()   { assertMatches(Patterns.rulePattern("PSQL_KEY_001"), "pscale_pw_" + "A".repeat(43)); }
+        @Test void postman()       { assertMatches(Patterns.rulePattern("POSTMAN_KEY_001"),"PMAK-" + "a".repeat(24) + "-" + "A".repeat(34)); }
     }
 }

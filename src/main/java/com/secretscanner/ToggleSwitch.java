@@ -79,6 +79,12 @@ class ToggleSwitch extends JComponent {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,      RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
+        // Fill background when opaque (e.g. used as a table cell renderer, so row selection shows).
+        if (isOpaque()) {
+            g2.setColor(getBackground());
+            g2.fillRect(0, 0, getWidth(), getHeight());
+        }
+
         Insets ins    = getInsets();
         int    h      = getHeight();
         int    trackY = (h - TRACK_H) / 2;

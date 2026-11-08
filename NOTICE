@@ -9,6 +9,23 @@ This product bundles Gson 2.10.1 — Apache License 2.0
 (https://github.com/google/gson). Gson is used by the response body walker
 to parse JSON values without a schema.
 
+This product bundles SnakeYAML 2.7 — Apache License 2.0
+(https://bitbucket.org/snakeyaml/snakeyaml). SnakeYAML loads the built-in
+detection rule files (rules/*.yaml) with its safe constructor.
+
+Some detection rule formats are adapted from Betterleaks
+(https://github.com/betterleaks/betterleaks), MIT License,
+Copyright (c) the Betterleaks authors. Those rules are marked
+"source: betterleaks" in rules/*.yaml.
+
+This product bundles detection rules converted from the Kingfisher
+rule catalog (https://github.com/mongodb/kingfisher), Apache License 2.0,
+Copyright (c) MongoDB, Inc. and the Kingfisher authors. The patterns were
+transformed to SecretSifter's rule schema; those rules are marked
+"source: kingfisher-betterleaks" and "license: Apache-2.0" in rules/*.yaml.
+A copy of the Apache License 2.0 governs these rules; see
+https://www.apache.org/licenses/LICENSE-2.0.
+
 ---
 
 Vendor token format specifications are publicly documented by their

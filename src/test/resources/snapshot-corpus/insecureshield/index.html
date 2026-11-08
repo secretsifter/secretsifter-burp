@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InsecureShield — Secure Client Portal</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <!-- Internal API config — TODO: move to vault before prod release
+         api_gateway_url: https://acme-portal-api.azure-api.net/v2
+         apim-subscription-key: a1b2c3d4e5f6789012345678901234ab
+         dev_admin: admin@acme-portal.com / (password rotated to Key Vault)
+         db_conn: Server=prod-db.acme-portal.internal;Database=AcmePortalDB;User Id=sa;Password=Pr0d$ql2024!;
+    -->
+    <script src="/js/crypto-js.min.js"></script>
+    <script src="/js/main.js"></script>
+    <script src="/js/env.js"></script>
+    <script src="/js/firebase.js"></script>
+    <!-- Webpack chunk prefetch: post-login dashboard bundle is fetched during initial
+         page load so it's ready when the user navigates to the dashboard -->
+    <link rel="preload" as="script" href="/js/app.js">
+</head>
+<body class="auth-body">
+
+    <div class="auth-wrapper">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <div class="logo-icon">&#9670;</div>
+                <div class="logo-text">
+                    <span class="logo-name">InsecureShield</span>
+                    <span class="logo-tagline">Client Portal</span>
+                </div>
+            </div>
+
+            <h2 class="auth-title">Sign In to Your Account</h2>
+            <p class="auth-subtitle">Access your policies, claims, and coverage details</p>
+
+            <div id="loginError" class="alert alert-error" style="display:none;"></div>
+
+            <form id="loginForm" class="auth-form" onsubmit="return handleLogin(event)">
+                <div class="form-group">
+                    <label for="email">Email Address</label>
+                    <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" placeholder="••••••••••" required autocomplete="current-password">
+                </div>
+                <div class="form-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="rememberMe"> Remember me
+                    </label>
+                    <a href="#" class="forgot-link">Forgot password?</a>
+                </div>
+                <button type="submit" class="btn btn-primary btn-full" id="loginBtn">
+                    Sign In
+                </button>
+            </form>
+
+            <div class="auth-footer">
+                <p>Need help? <a href="#">Contact Support</a></p>
+                <p class="auth-legal">By signing in, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a></p>
+            </div>
+        </div>
+
+        <div class="auth-side">
+            <div class="auth-side-content">
+                <h1>Protect What Matters Most</h1>
+                <p>Manage your insurance portfolio, submit claims, and track coverage — all in one secure place.</p>
+                <ul class="feature-list">
+                    <li>&#10003; Real-time claim status tracking</li>
+                    <li>&#10003; Instant policy document access</li>
+                    <li>&#10003; 24/7 secure portal access</li>
+                    <li>&#10003; Multi-policy management</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function handleLogin(e) {
+            e.preventDefault();
+            const btn   = document.getElementById('loginBtn');
+            const error = document.getElementById('loginError');
+            error.style.display = 'none';
+            btn.textContent = 'Signing in…';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/login', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({
+                        email:    document.getElementById('email').value,
+                        password: document.getElementById('password').value
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Login failed');
+
+                sessionStorage.setItem('token', data.token);
+                sessionStorage.setItem('role',  data.role);
+                sessionStorage.setItem('name',  data.name);
+                window.location.href = '/dashboard.html';
+            } catch (err) {
+                error.textContent    = err.message;
+                error.style.display  = 'block';
+                btn.textContent      = 'Sign In';
+                btn.disabled         = false;
+            }
+            return false;
+        }
+    </script>
+</body>
+</html>

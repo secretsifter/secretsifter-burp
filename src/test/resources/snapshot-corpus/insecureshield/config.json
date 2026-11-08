@@ -1,0 +1,24 @@
+{
+  "_comment": "InsecureShield Azure AD app registration — production tenant",
+  "azure": {
+    "tenantId":      "7c1064ea-b8c7-402f-bb82-76aaccc91dc4",
+    "clientId":      "574d67b9-348d-429c-ad51-9016e43facc8",
+    "client_secret": "Az~8Q.xK9mN2pR5tW7vY1uO4sD6jF0hBcZ3eR",
+    "authority":     "https://login.microsoftonline.com/7c1064ea-b8c7-402f-bb82-76aaccc91dc4",
+    "scope":         "https://acme-portal-api.azure-api.net/.default",
+    "redirectUri":   "https://portal.acme-portal.com/auth/callback"
+  },
+  "apim": {
+    "baseUrl":           "https://acme-portal-api.azure-api.net",
+    "subscriptionKey":   "f4e9b3a7c2d8f1e6b4a9c3d7f2e8b1a5",
+    "version":           "v2"
+  },
+  "storage": {
+    "connectionString": "DefaultEndpointsProtocol=https;AccountName=acmeportalprod;AccountKey=dGhpcyBpcyBhIGZha2UgYmFzZTY0IGVuY29kZWQgc3RvcmFnZSBrZXkgZm9yIGFjbWUtcG9ydGFs;EndpointSuffix=core.windows.net",
+    "containerName":    "policy-documents"
+  },
+  "cache": {
+    "redisUrl":      "redis://:R3d!s_4f7a9d2b8e@cache.acme-portal.internal:6379",
+    "ttlSeconds":    3600
+  }
+}

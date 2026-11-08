@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InsecureShield — Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="/js/crypto-js.min.js"></script>
+    <script src="/js/main.js"></script>
+    <script src="/js/env.js"></script>
+</head>
+<body class="app-body">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-icon small">&#9670;</div>
+            <span class="logo-name">InsecureShield</span>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="#" class="nav-item active" data-view="overview">
+                <span class="nav-icon">&#9632;</span> Overview
+            </a>
+            <a href="#" class="nav-item" data-view="policies">
+                <span class="nav-icon">&#9636;</span> Policies
+            </a>
+            <a href="#" class="nav-item" data-view="claims">
+                <span class="nav-icon">&#9638;</span> Claims
+            </a>
+            <a href="#" class="nav-item admin-only" data-view="customers" style="display:none;">
+                <span class="nav-icon">&#9632;</span> Customers
+            </a>
+            <a href="#" class="nav-item" data-view="profile">
+                <span class="nav-icon">&#9632;</span> Profile
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="user-info">
+                <div class="user-avatar" id="userAvatar">?</div>
+                <div>
+                    <div class="user-name" id="sidebarName">Loading…</div>
+                    <div class="user-role" id="sidebarRole"></div>
+                </div>
+            </div>
+            <a href="#" class="logout-btn" onclick="logout()">&#8594; Sign Out</a>
+        </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-content">
+        <header class="top-bar">
+            <h1 class="page-title" id="pageTitle">Overview</h1>
+            <div class="top-bar-right">
+                <div class="notification-bell" id="notifBell" title="Live notifications">&#9679; <span id="notifCount">0</span></div>
+                <span class="top-bar-name" id="topBarName">…</span>
+            </div>
+        </header>
+
+        <!-- Overview view -->
+        <section id="view-overview" class="view active">
+            <div class="stat-grid" id="statGrid">
+                <div class="stat-card">
+                    <div class="stat-value" id="statPolicies">—</div>
+                    <div class="stat-label">My Policies</div>
+                </div>
+                <div class="stat-card highlight">
+                    <div class="stat-value" id="statOpenClaims">—</div>
+                    <div class="stat-label">Open Claims</div>
+                </div>
+                <div class="stat-card admin-stat" style="display:none;">
+                    <div class="stat-value" id="statCustomers">—</div>
+                    <div class="stat-label">Total Customers</div>
+                </div>
+                <div class="stat-card admin-stat" style="display:none;">
+                    <div class="stat-value" id="statExposure">—</div>
+                    <div class="stat-label">Total Claim Exposure</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Recent Claims</div>
+                <div class="card-body">
+                    <table class="data-table" id="recentClaimsTable">
+                        <thead>
+                            <tr><th>Claim ID</th><th>Policy</th><th>Type</th><th>Amount</th><th>Date</th><th>Status</th></tr>
+                        </thead>
+                        <tbody id="recentClaimsBody"><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Policies view -->
+        <section id="view-policies" class="view">
+            <div class="card">
+                <div class="card-header">
+                    My Policies
+                    <span class="badge" id="policiesBadge">0</span>
+                </div>
+                <div class="card-body">
+                    <table class="data-table" id="policiesTable">
+                        <thead>
+                            <tr><th>Policy ID</th><th>Type</th><th>Coverage</th><th>Premium/yr</th><th>Start</th><th>End</th><th>Status</th></tr>
+                        </thead>
+                        <tbody id="policiesBody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Claims view -->
+        <section id="view-claims" class="view">
+            <div class="card">
+                <div class="card-header">
+                    Claims
+                    <span class="badge" id="claimsBadge">0</span>
+                </div>
+                <div class="card-body">
+                    <table class="data-table" id="claimsTable">
+                        <thead>
+                            <tr><th>Claim ID</th><th>Policy</th><th>Type</th><th>Description</th><th>Amount</th><th>Submitted</th><th>Status</th></tr>
+                        </thead>
+                        <tbody id="claimsBody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Customers view (admin only) -->
+        <section id="view-customers" class="view">
+            <div class="card">
+                <div class="card-header">
+                    All Customers — Full PII
+                    <span class="badge danger" id="customersBadge">0</span>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-warning">
+                        &#9888; Admin view — contains full PII. Restricted to authorized personnel only.
+                    </div>
+                    <table class="data-table" id="customersTable">
+                        <thead>
+                            <tr><th>ID</th><th>Name</th><th>Email</th><th>DOB</th><th>Phone</th><th>SSN</th><th>Address</th><th>Member Since</th></tr>
+                        </thead>
+                        <tbody id="customersBody"><tr><td colspan="8" class="loading">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+        <!-- Profile view -->
+        <section id="view-profile" class="view">
+
+            <!-- Own profile card -->
+            <div class="card" id="profileCard">
+                <div class="card-header">
+                    My Profile
+                    <span class="badge" id="profileIdBadge" style="margin-left:auto;font-weight:400;font-size:11px;background:var(--text-muted);">ID: —</span>
+                </div>
+                <div class="card-body" style="padding:24px;">
+                    <div id="profileAlert" class="alert alert-error" style="display:none;"></div>
+                    <div class="profile-grid" id="profileFields">
+                        <div class="loading">Loading profile…</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- IDOR: lookup any user profile by numeric ID -->
+            <div class="card">
+                <div class="card-header">View User Profile by ID
+                    <span style="font-size:11px;font-weight:400;color:var(--danger);margin-left:8px;">⚠ No ownership check — IDOR</span>
+                </div>
+                <div class="card-body" style="padding:20px;">
+                    <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:16px;">
+                        <div>
+                            <label class="field-label">User ID (1 – 25)</label>
+                            <input type="number" id="idorIdInput" min="1" max="25" placeholder="e.g. 3"
+                                   style="width:120px;padding:8px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:14px;">
+                        </div>
+                        <button class="btn btn-primary" onclick="lookupProfileById()">Lookup</button>
+                    </div>
+                    <div id="idorAlert" class="alert alert-error" style="display:none;"></div>
+                    <div id="idorResult"></div>
+                </div>
+            </div>
+
+            <!-- Change password -->
+            <div class="card">
+                <div class="card-header">Change Password</div>
+                <div class="card-body" style="padding:24px;">
+                    <div id="pwdAlert" style="display:none;" class="alert"></div>
+                    <div class="profile-form">
+                        <div class="profile-form-row">
+                            <div class="form-group-inline">
+                                <label class="field-label">Current Password <span style="color:var(--text-muted);font-weight:400;">(own account only)</span></label>
+                                <input type="password" id="currentPassword" placeholder="Leave blank when using Target User ID"
+                                       style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:7px;font-size:14px;">
+                            </div>
+                            <div class="form-group-inline">
+                                <label class="field-label">New Password</label>
+                                <input type="password" id="newPassword" placeholder="Min 6 characters"
+                                       style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:7px;font-size:14px;">
+                            </div>
+                            <div class="form-group-inline">
+                                <label class="field-label">Target User ID <span style="color:var(--danger);font-size:11px;">⚠ IDOR — overrides ownership check</span></label>
+                                <input type="number" id="pwdTargetId" min="1" max="25" placeholder="Leave blank for own account"
+                                       style="width:100%;padding:9px 11px;border:1.5px solid var(--border);border-radius:7px;font-size:14px;">
+                            </div>
+                        </div>
+                        <button class="btn btn-primary" onclick="changePassword()" id="pwdBtn">Update Password</button>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

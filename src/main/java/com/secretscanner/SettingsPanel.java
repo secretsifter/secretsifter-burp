@@ -120,7 +120,7 @@ public class SettingsPanel implements burp.api.montoya.ui.settings.SettingsPanel
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
-        JLabel intro = new JLabel("Detection settings for OWASP SecretSifter. Click \"Save Settings\" to apply.");
+        JLabel intro = new JLabel("Detection settings for SecretSifter. Click \"Save Settings\" to apply.");
         intro.setForeground(Color.GRAY);
         intro.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(intro);

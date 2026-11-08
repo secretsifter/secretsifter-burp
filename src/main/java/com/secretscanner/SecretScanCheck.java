@@ -39,9 +39,10 @@ public class SecretScanCheck implements PassiveScanCheck {
         if (!settings.isEnabled()) return AuditResult.auditResult(List.of());
         try {
             List<SecretFinding> findings = scanner.scanRequestResponse(requestResponse);
-            // Route to the Bulk Scan panel when a scope-monitor session is active, so passively
-            // audited traffic for a watched host surfaces in the Bulk Scan table as well as the
-            // site map. seenFindings dedup in appendFinding prevents any double-counting.
+            // Route to Bulk Scan panel immediately — Burp's scanner thread runs doCheck()
+            // the sole passive detection path; routing here closes
+            // the gap between "site map shows findings" and "bulk scan table shows findings".
+            // seenFindings dedup in appendFinding prevents any double-counting.
             if (ScopeMonitor.isActive() && !findings.isEmpty()
                     && requestResponse.request() != null) {
                 String url = requestResponse.request().url();

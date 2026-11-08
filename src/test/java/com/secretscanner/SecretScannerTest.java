@@ -65,9 +65,9 @@ class SecretScannerTest {
         @Test
         @DisplayName("Fine-grained PAT in JSON response is reported HIGH")
         void finePat_inJson() {
-            String body = "{\"token\":\"github_pat_" + "A".repeat(82) + "\"}";
+            String body = "{\"token\":\"github_pat_" + synth(82) + "\"}";
             List<SecretFinding> findings = scanner.scanText(body, "application/json", "https://example.com/api");
-            assertFinding(findings, "github_pat_" + "A".repeat(82), "HIGH");
+            assertFinding(findings, "github_pat_" + synth(82), "HIGH");
         }
 
         @Test
@@ -266,10 +266,18 @@ class SecretScannerTest {
         @Test
         @DisplayName("OpenAI API key in JSON config blob is reported HIGH")
         void openaiKey_reportedHigh() {
-            String body = "{\"openai_key\":\"sk-" + "A".repeat(48) + "\"}";
+            String body = "{\"openai_key\":\"sk-" + synth(48) + "\"}";
             List<SecretFinding> findings = scanner.scanText(body, "application/json", "https://example.com/config");
-            assertFinding(findings, "sk-" + "A".repeat(48), "HIGH");
+            assertFinding(findings, "sk-" + synth(48), "HIGH");
         }
+    }
+
+    /** Synthetic token body of length n (mixed case and digits; all-"A" bodies are placeholders). */
+    private static String synth(int n) {
+        String base = "Q7mXp2Lr9Tz4Kw8Nv3Hb6Jd1Fs5Gc0Ye";
+        StringBuilder sb = new StringBuilder();
+        while (sb.length() < n) sb.append(base);
+        return sb.substring(0, n);
     }
 
     // =========================================================================

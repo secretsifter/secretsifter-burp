@@ -2,6 +2,16 @@
 
 All notable changes to SecretSifter are documented here.
 
+## [1.1.0] — 2026-11-08
+
+### Added
+- **Expanded detection engine.** The built-in rules moved to a maintainable YAML rule engine: 158 anchored vendor-token rules and 279 context-gated rules (including vendored, attributed Kingfisher community rules). Keyword pre-filtering and possessive-quantifier patterns keep scanning fast and ReDoS-safe.
+- **SARIF and JSON report export** (in addition to CSV / HTML / ZIP).
+- **WebSocket text-frame scanning** through the proxy.
+- **Stable, permanent issue IDs** (`SS-102426-7K4M2Q`) with per-secret grouping and non-reversible fingerprints.
+
+This release also carries every BApp Store review fix from 1.0.6: detection consolidated into the passive scan check, no bulk data retrieval on the Event Dispatch Thread, reduced site-map index memory, logged background failures, HTTP fetches via Burp's HTTP API (no custom TLS trust manager), and configuration moved to Burp's native Settings dialog.
+
 ## [1.0.6] — 2026-11-08
 
 ### Changed (BApp Store review feedback)

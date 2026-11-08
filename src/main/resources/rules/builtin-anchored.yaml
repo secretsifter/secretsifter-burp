@@ -1,0 +1,2822 @@
+# SecretSifter built-in rules. Format-anchored vendor tokens (distinctive prefix or structure).
+# Order is significant: rules are evaluated in file order.
+# Schema: see com.secretscanner.rules.RuleLoader.
+version: 1
+rules:
+  - id: 'GITHUB_PAT_001'
+    name: 'GitHub PAT (Classic)'
+    key: 'github_pat_classic'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bghp_[A-Za-z0-9]{36}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'GitHub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const token = \"ghp_Ll6BVUlR0KN318G0n0otpdy30LIUkyT46Ntq\";"
+      - "Authorization: token ghp_Ll6BVUlR0KN318G0n0otpdy30LIUkyT46Ntq"
+    negative_examples:
+      - "ghp_Ll6BVUlR0KN318G0n0otpdy30LIUkyT46Nt\""
+      - "xghp_Ll6BVUlR0KN318G0n0otpdy30LIUkyT46Ntq"
+  - id: 'GITHUB_PAT_002'
+    name: 'GitHub OAuth Token'
+    key: 'github_oauth_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bgho_[A-Za-z0-9]{36}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'GitHub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "{\"access_token\":\"gho_MZjoWsY8IzVeA0urShFshXBAOz85botZu8oR\"}"
+      - "GITHUB_OAUTH=gho_MZjoWsY8IzVeA0urShFshXBAOz85botZu8oR"
+    negative_examples:
+      - "gho_MZjoWsY8IzVeA0urShFshXBAOz85bo"
+      - "Gho_MZjoWsY8IzVeA0urShFshXBAOz85botZu8oR"
+  - id: 'GITHUB_PAT_003'
+    name: 'GitHub Actions Token'
+    key: 'github_actions_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bghs_[A-Za-z0-9]{36}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'GitHub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "token: \"ghs_PL3CkRbDCpjdEZtFC6r7qLEPacM0QSffF2GT\""
+      - "x-access-token:ghs_PL3CkRbDCpjdEZtFC6r7qLEPacM0QSffF2GT@github.com"
+    negative_examples:
+      - "ghs_PL3CkRbDCpjdEZtFC6r7qLEPacM0QSffF2G."
+      - "aghs_PL3CkRbDCpjdEZtFC6r7qLEPacM0QSffF2GT"
+  - id: 'GITHUB_PAT_004'
+    name: 'GitHub Refresh Token'
+    key: 'github_refresh_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bghr_(?:[A-Za-z0-9]{36}|[A-Za-z0-9]{76})\b'
+    source: secretsifter
+    license: MIT
+    provider: 'GitHub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"refresh_token\":\"ghr_0spWTKm7iGF8lTyKM5wdDPWCKxh7m5H5oYtQaH20l0q6bnMvE1qdZvEPIP3x4eLQmFB8a7VKcqxk\""
+      - "ghr_0spWTKm7iGF8lTyKM5wdDPWCKxh7m5H5oYtQaH20l0q6bnMvE1qdZvEPIP3x4eLQmFB8a7VKcqxk"
+      - "refresh_token=ghr_XcDduv4Us1M2sO6edloLSXHnEPncWupI2d9h"
+    negative_examples:
+      - "ghr_0spWTKm7iGF8lTyKM5wdDPWCKxh7m5H5oYtQaH20l0q6bnMvE1qdZvEPIP3x4eLQmFB8a7"
+      - "ghr-0spWTKm7iGF8lTyKM5wdDPWCKxh7m5H5oYtQaH20l0q6bnMvE1qdZvEPIP3x4eLQmFB8a7VKcqxk"
+  - id: 'GITHUB_PAT_005'
+    name: 'GitHub Fine-Grained PAT'
+    key: 'github_fine_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bgithub_pat_[A-Za-z0-9_]{82}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'GitHub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const pat = \"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\";"
+      - "GH_TOKEN=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"
+    negative_examples:
+      - "github_pat_jU8dglohSC0p0OLrfeCalaSye_Eqz_lXLoZAmbNaEpRuzXZ52RN9WiCxuAzo"
+      - "github-pat_jU8dglohSC0p0OLrfeCalaSye_Eqz_lXLoZAmbNaEpRuzXZ52RN9WiCxuAzolxIwy_6u38g_dpmA8jGACe"
+  - id: 'GITHUB_PAT_006'
+    name: 'GitHub User-to-Server Token'
+    key: 'github_user_server_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bghu_[A-Za-z0-9]{36}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'GitHub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const GITHUB_TOKEN = \"ghu_DgmN2V1JWw2te7lMxGNyFFlGXp4VEgm4n3Yc\";"
+      - "{\"GITHUB_TOKEN\": \"ghu_DgmN2V1JWw2te7lMxGNyFFlGXp4VEgm4n3Yc\"}"
+    negative_examples:
+      - "ghu_aaaaaaaaaaaaaaaaaaaa"
+  - id: 'GITLAB_PAT_001'
+    name: 'GitLab Personal Access Token'
+    key: 'gitlab_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bglpat-[A-Za-z0-9_\-]{20,300}(?:\.[0-9a-z]{2}\.?[0-9a-z]{7,9})?(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'GitLab'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "PRIVATE-TOKEN: glpat-DItXRoE0DswYV3KxZb9O"
+      - "GITLAB_TOKEN=glpat-KDhkA7656O8iMBv52ioLXpT0flR.01.oq2qyww0q"
+      - "\"gitlabToken\":\"glpat-eOctkgdFUxfljAzyYZm-\""
+    negative_examples:
+      - "glpat-eOctkgdFUxfljAz"
+      - "glpat_eOctkgdFUxfljAzyYZm-"
+  - id: 'GITLAB_PAT_002'
+    name: 'GitLab Deploy Token'
+    key: 'gitlab_deploy_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bgldt-[A-Za-z0-9\-_]{20}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'GitLab'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "deployToken = \"gldt-dwEUN9cdAK3Ahn6q5Npb\""
+      - "gldt-dwEUN9cdAK3Ahn6q5Npb"
+    negative_examples:
+      - "gldt-dwEUN9cdAK3A"
+      - "gldtdwEUN9cdAK3Ahn6q5Npb"
+  - id: 'GITLAB_PAT_003'
+    name: 'GitLab Runner / Feed / Trigger / Job Token'
+    key: 'gitlab_other_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:glrt|glft|glffct|glimt|glsoat|glagent|gloas)-[A-Za-z0-9_\-]{20,64}(?![A-Za-z0-9_\-])|\bglptt-[0-9a-f]{40}\b|\bglcbt-[0-9a-zA-Z]{1,5}_[0-9a-zA-Z_\-]{20}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'GitLab'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const CI_RUNNER_TOKEN = \"glrt-SsG1FWJbJjMLeTXsnLkZ\";"
+      - "{\"CI_RUNNER_TOKEN\": \"glrt-SsG1FWJbJjMLeTXsnLkZ\"}"
+      - "TRIGGER=glptt-5563d006ea918023dafb7e5866bbfd6c96fff99e"
+    negative_examples:
+      - "glrt-short"
+  - id: 'NPM_TOKEN_001'
+    name: 'npm Access Token'
+    key: 'npm_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bnpm_[A-Za-z0-9]{36}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'npm'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "//registry.npmjs.org/:_authToken=npm_yfpzUmCcSGcw22941NAaUf5QJHvf5CoVvDPf"
+      - "\"npmToken\":\"npm_yfpzUmCcSGcw22941NAaUf5QJHvf5CoVvDPf\""
+    negative_examples:
+      - "npm_yfpzUmCcSGcw22941NAaUf5QJHvf5CoVvDP\""
+      - "npm-yfpzUmCcSGcw22941NAaUf5QJHvf5CoVvDPf"
+  - id: 'SLACK_TOKEN_001'
+    name: 'Slack Bot Token'
+    key: 'slack_bot_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxoxb-[0-9]{8,14}-(?:[0-9]{10,13}-)?[A-Za-z0-9]{18,34}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Slack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"botToken\":\"xoxb-437255363469-9112734084827-Jqdhg0Vd0HgFXTiEmNZ2H9Su\""
+      - "Authorization: Bearer xoxb-44312656440-244612834241-6IdKRJoZk3PAy4QLdU4lnPBu"
+      - "SLACK_BOT_TOKEN=xoxb-59549437451-yWl92BZ4omYRSM7cQ1jHBDpq"
+    negative_examples:
+      - "xoxb-abc-def"
+      - "xoxb-12345-short"
+  - id: 'SLACK_TOKEN_002'
+    name: 'Slack User Token'
+    key: 'slack_user_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxoxp-[0-9]{10,13}-[0-9]{10,13}-[0-9]{10,13}-[A-Za-z0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Slack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "token: \"xoxp-293149057851-196600234126-4305728627859-76A08NhCdNIo50c9A2Ax5yK0zVkNhVO5\""
+      - "SLACK_USER_TOKEN=xoxp-97855786707-35471430952-636096137611-mbnsZA4ZBBe47phHqe13pKq4iFd96p0W"
+    negative_examples:
+      - "xoxp-293149057851-196600234126-76A08NhCdNIo50c9A2Ax5yK0zVkNhVO5"
+      - "xoxp-293149057851-196600234126-4305728627859-76A08NhCdNIo50c9A2Ax"
+  - id: 'SLACK_TOKEN_003'
+    name: 'Slack App Token'
+    key: 'slack_app_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxapp-\d-[A-Z0-9]+-\d+-[a-z0-9]+\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Slack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const SLACK_APP_TOKEN = \"xapp-1-AEPMVY11N6Y-0865330122997-fc98403a27c6f949d9aa59181a32e8513d1b5dde3649b1222900017225d903e0\";"
+      - "{\"SLACK_APP_TOKEN\": \"xapp-1-AEPMVY11N6Y-0865330122997-fc98403a27c6f949d9aa59181a32e8513d1b5dde3649b1222900017225d903e0\"}"
+    negative_examples:
+      - "xapp-1-tc2XVGDS1hylUQIbDqXe"
+      - "xapp-x-tc2XVGDS1hylUQIbDqXeQvQYMd9RGQ"
+    missed_examples:
+      - "\"appToken\":\"xapp-1-V1QUC5HHM4E-708799832153059ee7479aec4fe838dcbcfd396dfe7065f0a9b95\""
+  - id: 'SLACK_TOKEN_004'
+    name: 'Slack Refresh / Config Token'
+    key: 'slack_config_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxoxe(?:\.xox[bp])?-\d-[A-Za-z0-9]{140,180}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Slack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "SLACK_REFRESH=\"xoxe-1-w7H7i6qMOJB1z3YJhVYA0z8YRaljqpXuFw8If9HORhPVD5cSZgTaWeGW1LE1hJWDcS153U2TBmfCIlcBv0MM60IDS2XMorxCFF1AU3IzC6tgBAkdSmazjSIg7gq1UgCCaXGaVa5EEl9ZkbEzio\""
+      - "{\"config_token\": \"xoxe.xoxp-1-UExnbNkIh7SGcvSdWeSYDJpn3FHj6MiKXQjJjaEsksxqzdToBYnkh8t0GNEHIvVjJlryVenBXrMsoowDwn7kOtrCG1r3Iu1NOAqcnm4aBXLMp7Cq8MzY1T7ijI0KJv6W4eZfXhPOun81ESfUdhxEcwG9PvBT99V3OHo8\"}"
+    negative_examples:
+      - "xoxe-1-short"
+  - id: 'STRIPE_KEY_001'
+    name: 'Stripe Secret Key (Live)'
+    key: 'stripe_secret_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk_live_[A-Za-z0-9]{24,200}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Stripe'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Stripe(\"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\")"
+      - "STRIPE_SECRET_KEY=sk_live_ZlimLIEKYF3i4mabmfMjpTVC"
+    negative_examples:
+      - "sk_live_ZlimLIEKYF3i4mabmfMjpTV\""
+      - "sk_life_ZlimLIEKYF3i4mabmfMjpTVCTAVVgf3CiUDfEfeTAknB0CTE2DOXzTqVfJj8mJIF7smUjZYW5ULlZ6X9lmVIMFBOQQ4fw7kGGqi"
+  - id: 'STRIPE_KEY_002'
+    name: 'Stripe Secret Key (Test)'
+    key: 'stripe_test_key'
+    kind: anchored
+    severity: LOW
+    pattern: '\bsk_test_[A-Za-z0-9]{24,200}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Stripe'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const stripe = require(\"stripe\")(\"sk_test_51KLBvj1YuC61lxfGAkz828OjclW0AUqTGJs9KwmsV3yeVec9Ry2qjF2NKqEuZfyJGS6gZGcNYKYQHB7kMpwwH122OT3Qkz38t4p0\");"
+      - "sk_test_KLBvj1YuC61lxfGAkz828OjclW0AUq"
+    negative_examples:
+      - "sk_test_KLBvj1YuC61lxfGAkz82"
+      - "ask_test_KLBvj1YuC61lxfGAkz828OjclW0AUqTGJs9KwmsV3yeVec9Ry2qjF2NKqEuZfyJGS6gZGcNYKYQHB7kMpwwH122OT3Qkz38t4p0"
+  - id: 'STRIPE_KEY_003'
+    name: 'Stripe Restricted Key'
+    key: 'stripe_restricted_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\brk_live_[A-Za-z0-9]{24,200}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Stripe'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"restrictedKey\":\"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\""
+      - "rk_live_VHceCNSWkaTaqCND3Uz6QZTR"
+    negative_examples:
+      - "rk_live_VHceCNSWka"
+      - "rk_test_VHceCNSWkaTaqCND3Uz6QZTRx5hbijtvJc1VdCmPs6cgABVtwMLInwXC3zy3N2BRZM4NOlrjM5yoXJuS7rVsEiM5mciXz9nFE6c"
+  - id: 'SENDGRID_KEY_001'
+    name: 'SendGrid API Key'
+    key: 'sendgrid_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bSG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'SendGrid'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "apiKey: \"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\""
+      - "Authorization: Bearer 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"
+    negative_examples:
+      - "SG.5zgQg_EeQWRbLEQZx7_3b.mmA4OpOVfZt4FLFnrQxpskFDOu4SMcawQVT2vDbM8FG"
+      - "SG-5zgQg_EeQWRbLEQZx7_3by.mmA4OpOVfZt4FLFnrQxpskFDOu4SMcawQVT2vDbM8FG"
+  - id: 'TWILIO_SID_001'
+    name: 'Twilio Account SID'
+    key: 'twilio_account_sid'
+    kind: anchored
+    severity: LOW
+    pattern: '\b(?:AC|SK|FO|FW|AT)[a-f0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Twilio'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "accountSid: \"AC20bc6e97edfe219c8854cff8e406135a\""
+      - "https://api.twilio.com/2010-04-01/Accounts/ACfcab870bd9dadb40a8e3db7c7bb6d1ef/Messages.json"
+    negative_examples:
+      - "AC20bc6e97edfe219c8854cff8e406135\""
+      - "ACGMPAG4VT431GSN7YE63AUHPMOAQ4JTNGXYZ"
+  - id: 'OPENAI_KEY_001'
+    name: 'OpenAI API Key'
+    key: 'openai_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk-[A-Za-z0-9]{48}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'OpenAI'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "OPENAI_API_KEY=\"sk-NrnJLU0UKtA2pPdfRsOQQOshkiavKiNGHss5WH8fceaXkIt6\""
+      - "Authorization: Bearer sk-BMXsP4dXbEUCEIUDT0cGsoFQiJGwerrbdQOMuo5bfrSaXgLG"
+    negative_examples:
+      - "sk-NrnJLU0UKtA2pPdfRsOQQOshkiavKiNGHss5WH8fceaXkIt\""
+      - "sk_NrnJLU0UKtA2pPdfRsOQQOshkiavKiNGHss5WH8fceaXkIt6"
+  - id: 'OPENAI_KEY_002'
+    name: 'OpenAI Project / Service Account / Admin Key'
+    key: 'openai_project_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,250}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'OpenAI'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "apiKey: \"sk-proj-G0cfScF2xQtDcAvxRYLd8IBMcxfOKkW8dAytlHLp-sWTHFgMTnH3DB6YbglNAXkTjEWuqiY6-cPO8DnB0vZ6syRyyojbTH5N8y9o-U0thKSjojKdmXB2VQY_\""
+      - "OPENAI_API_KEY=sk-proj-yLVce7f7rSj_SiQh5KlgwfQYmaqtq88jc4DX3M30Rqu2GR58A6d8bJW0anu6BJ_S"
+      - "OPENAI_API_KEY=\"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\""
+      - "OPENAI_API_KEY=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"
+      - "OPENAI_ADMIN_KEY=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"
+    negative_examples:
+      - "sk-proj-short"
+      - "sk_proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  - id: 'OPENROUTER_KEY_001'
+    name: 'OpenRouter API Key'
+    key: 'openrouter_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk-or-v1-[0-9a-f]{64}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'OpenRouter'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const openrouter_api_key = \"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\";"
+      - "{\"openrouter_api_key\": \"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\"}"
+    negative_examples:
+      - "sk-or-v1-e8ad630b5d8d1ebd6c4bdda42c3"
+  - id: 'PERPLEXITY_KEY_001'
+    name: 'Perplexity API Key'
+    key: 'perplexity_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpplx-[A-Za-z0-9]{48}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Perplexity'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const perplexity_api_key = \"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\";"
+      - "{\"perplexity_api_key\": \"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\"}"
+    negative_examples:
+      - "pplx-i9cifAMJZtaKhCOlPqujr"
+  - id: 'NVIDIA_KEY_001'
+    name: 'NVIDIA API Key'
+    key: 'nvidia_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bnvapi-[A-Za-z0-9_\-]{60,70}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'NVIDIA'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const nvidia_api_key = \"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\";"
+      - "{\"nvidia_api_key\": \"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\"}"
+    negative_examples:
+      - "nvapi-sZmpQlFOaQg_HGxNhvmSNYesWhMqE"
+  - id: 'HF_KEY_002'
+    name: 'Hugging Face Org API Token'
+    key: 'huggingface_org_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bapi_org_[A-Za-z]{34}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Hugging Face'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const huggingface_org_token = \"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\";"
+      - "{\"huggingface_org_token\": \"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\"}"
+    negative_examples:
+      - "api_org_QwErTyUiOpAsD"
+  - id: 'POSTHOG_KEY_001'
+    name: 'PostHog Personal API Key'
+    key: 'posthog_personal_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bphx_[A-Za-z0-9_\-]{41,49}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'PostHog'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const posthog_personal_key = \"phx_0GNkTPgNBBvzrlqLGY1JL336vaelshF8KRRLM5gGxFX\";"
+      - "{\"posthog_personal_key\": \"phx_0GNkTPgNBBvzrlqLGY1JL336vaelshF8KRRLM5gGxFX\"}"
+    negative_examples:
+      - "phx_0GNkTPgNBBvzrlqLGY1"
+  - id: 'POSTHOG_KEY_002'
+    name: 'PostHog Project Key (public)'
+    key: 'posthog_project_key'
+    kind: anchored
+    severity: INFORMATION
+    pattern: '\bphc_[A-Za-z0-9_\-]{41,44}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'PostHog'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const posthog_project_key = \"phc_nI1AauYfKwYoTZ9GWBrEuYmHlCA3PtF49JnPdNUACk1\";"
+      - "{\"posthog_project_key\": \"phc_nI1AauYfKwYoTZ9GWBrEuYmHlCA3PtF49JnPdNUACk1\"}"
+    negative_examples:
+      - "phc_nI1AauYfKwYoTZ9GWBr"
+  - id: 'RESEND_KEY_001'
+    name: 'Resend API Key'
+    key: 'resend_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bre_[1-9A-HJ-NP-Za-km-z]{8}_[1-9A-HJ-NP-Za-km-z]{24}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Resend'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const resend_api_key = \"re_aB3dE5fG_hJ9kL2mN3pQ5rS7tU9vW2xY4\";"
+      - "{\"resend_api_key\": \"re_aB3dE5fG_hJ9kL2mN3pQ5rS7tU9vW2xY4\"}"
+    negative_examples:
+      - "re_aB3dE5fG_hJ9kL2"
+  - id: 'MAILERSEND_KEY_001'
+    name: 'MailerSend API Token'
+    key: 'mailersend_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bmlsn\.[A-Za-z0-9]{30,100}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'MailerSend'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const mailersend_token = \"mlsn.bSI36PRdmqm1fUV6sIrGhEXLeO0BfvxA8cBVtM9wo0JqfXgCq5s79NG0AUD0Kxfn\";"
+      - "{\"mailersend_token\": \"mlsn.bSI36PRdmqm1fUV6sIrGhEXLeO0BfvxA8cBVtM9wo0JqfXgCq5s79NG0AUD0Kxfn\"}"
+    negative_examples:
+      - "mlsn.bSI36PRdmqm1fUV6sIrGhEXLeO0Bf"
+  - id: 'DOCKERHUB_KEY_001'
+    name: 'Docker Hub Access Token'
+    key: 'dockerhub_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdckr_(?:pat|oat)_[A-Za-z0-9_\-]{27,32}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'Docker Hub'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const dockerhub_token = \"dckr_pat_rnZBUojmaGHTFpkVCKIrSrsF3fW\";"
+      - "{\"dockerhub_token\": \"dckr_pat_rnZBUojmaGHTFpkVCKIrSrsF3fW\"}"
+    negative_examples:
+      - "dckr_pat_rnZBUojma"
+  - id: 'NEON_KEY_001'
+    name: 'Neon API Key'
+    key: 'neon_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bnapi_[A-Za-z0-9]{64}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Neon'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const neon_api_key = \"napi_JaiEHUdvVt3H9TI5nqCpU9OIQcuUbYakVyYNf7WVnrOHOioKuYZROs78ZyELbB6W\";"
+      - "{\"neon_api_key\": \"napi_JaiEHUdvVt3H9TI5nqCpU9OIQcuUbYakVyYNf7WVnrOHOioKuYZROs78ZyELbB6W\"}"
+    negative_examples:
+      - "napi_JaiEHUdvVt3H9TI5nqCpU9OIQcuUb"
+  - id: 'HEROKU_KEY_002'
+    name: 'Heroku API Key (v2)'
+    key: 'heroku_api_key_v2'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bHRKU-AA[0-9A-Za-z_\-]{58}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'Heroku'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const heroku_api_key_v2 = \"HRKU-AAAXwgdv63IEgrqNMEswA3zblCnCUBHVvh9UkFZ2cBCX1T8xcshZEmbfXHKb\";"
+      - "{\"heroku_api_key_v2\": \"HRKU-AAAXwgdv63IEgrqNMEswA3zblCnCUBHVvh9UkFZ2cBCX1T8xcshZEmbfXHKb\"}"
+    negative_examples:
+      - "HRKU-AAAXwgdv63IEgrqNMEswA3zblCn"
+  - id: 'SEGMENT_KEY_001'
+    name: 'Segment Public API Token'
+    key: 'segment_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsgp_[A-Za-z0-9]{64}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Segment'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const segment_api_token = \"sgp_1hXQBlCQytj6VW12yPRGW2iz4cNAMjZLtT7qlGaWoY6vTrPMB9yFf9Bwtmif1XeF\";"
+      - "{\"segment_api_token\": \"sgp_1hXQBlCQytj6VW12yPRGW2iz4cNAMjZLtT7qlGaWoY6vTrPMB9yFf9Bwtmif1XeF\"}"
+    negative_examples:
+      - "sgp_1hXQBlCQytj6VW12yPRGW2iz4cNAMj"
+  - id: 'VERCEL_KEY_002'
+    name: 'Vercel Token'
+    key: 'vercel_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bv(?:cp|ci|ca|cr|ck)_[A-Za-z0-9_\-]{56}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'Vercel'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const vercel_token = \"vcp_Pvmpe8UJO8D7LKE_6hhqyg-bSYmpM-B_X7EfzsJZrn_re-nVjoBAr7HD\";"
+      - "{\"vercel_token\": \"vcp_Pvmpe8UJO8D7LKE_6hhqyg-bSYmpM-B_X7EfzsJZrn_re-nVjoBAr7HD\"}"
+    negative_examples:
+      - "vcp_Pvmpe8UJO8D7LKE_6hhqyg-bSY"
+  - id: 'ELASTIC_KEY_002'
+    name: 'Elastic Cloud API Key'
+    key: 'elastic_cloud_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bessu_[A-Za-z0-9_\-]{60,200}={0,2}'
+    source: betterleaks
+    license: MIT
+    provider: 'Elastic'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const elastic_cloud_key = \"essu_L4VoO8zusBHxqkcJSTXC7U15hvOAvj0p8HYYw4HPdnVfecOnnCsJAL5DbfbEfuCCgvQZhJHcLbGHcy4K\";"
+      - "{\"elastic_cloud_key\": \"essu_L4VoO8zusBHxqkcJSTXC7U15hvOAvj0p8HYYw4HPdnVfecOnnCsJAL5DbfbEfuCCgvQZhJHcLbGHcy4K\"}"
+    negative_examples:
+      - "essu_L4VoO8zusBHxqkcJSTXC7U15hvOAvj0p8HYYw"
+  - id: 'AWS_KEY_003'
+    name: 'AWS Bedrock API Key (long-lived)'
+    key: 'aws_bedrock_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bABSK[A-Za-z0-9+/]{109,269}={0,2}'
+    source: betterleaks
+    license: MIT
+    provider: 'AWS'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const aws_bedrock_key = \"ABSKWa69eyyVINo/Vb6yP/o4Avs4q+/13fkCeV+Fi/9+S0WB3vF8YzM9yN1bHUS4PiV/Uo9/hxDOfm6PtkMmpN/yKNrwHbCYwgzMCkDvWClUxHp/+cWSQXMTq+Ta\";"
+      - "{\"aws_bedrock_key\": \"ABSKWa69eyyVINo/Vb6yP/o4Avs4q+/13fkCeV+Fi/9+S0WB3vF8YzM9yN1bHUS4PiV/Uo9/hxDOfm6PtkMmpN/yKNrwHbCYwgzMCkDvWClUxHp/+cWSQXMTq+Ta\"}"
+    negative_examples:
+      - "ABSKWa69eyyVINo/Vb6yP/o4Avs4q+/13fkCeV+Fi/9+S0WB3vF8YzM9yN1bHU"
+  - id: 'FACEBOOK_KEY_001'
+    name: 'Facebook Page Access Token'
+    key: 'facebook_page_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bEAA[MC][A-Za-z0-9]{100,}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Meta'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const facebook_page_token = \"EAACXrHZzor66ftpwhz1g9QxJkPVdGL5cTynTS80YAD8mHEJFfW2rBwPJf96rvzP1F9Js0I1RhUdVPQhEVZiX40ovrhXdShH72vbTrSb9jSSMGguwYCAcsh5kKnB\";"
+      - "{\"facebook_page_token\": \"EAACXrHZzor66ftpwhz1g9QxJkPVdGL5cTynTS80YAD8mHEJFfW2rBwPJf96rvzP1F9Js0I1RhUdVPQhEVZiX40ovrhXdShH72vbTrSb9jSSMGguwYCAcsh5kKnB\"}"
+    negative_examples:
+      - "EAACXrHZzor66ftpwhz1g9QxJkPVdGL5cTynTS80YAD8mHEJFfW2rBwPJf96rv"
+  - id: 'SLACK_TOKEN_006'
+    name: 'Slack Session Token (xoxc)'
+    key: 'slack_session_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxoxc-\d{9,15}-\d{9,15}-\d{9,15}-[a-f0-9]{64}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Slack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const slack_session_token = \"xoxc-459161405864-032537318188-923568682872-dcdaa16c75aa03eeb4345b3e3c288a4215f84a658fcd97571eea91e45c82f02d\";"
+      - "{\"slack_session_token\": \"xoxc-459161405864-032537318188-923568682872-dcdaa16c75aa03eeb4345b3e3c288a4215f84a658fcd97571eea91e45c82f02d\"}"
+    negative_examples:
+      - "xoxc-459161405864-032537318188-923568682872-dcdaa16c75"
+  - id: 'PLAID_KEY_001'
+    name: 'Plaid Access Token'
+    key: 'plaid_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\baccess-(?:sandbox|development|production)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Plaid'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const plaid_access_token = \"access-production-a62e79e4-6149-1c6c-3434-6688874f6982\";"
+      - "{\"plaid_access_token\": \"access-production-a62e79e4-6149-1c6c-3434-6688874f6982\"}"
+    negative_examples:
+      - "access-production-a62e79e4-"
+  - id: 'AZURE_AD_KEY_001'
+    name: 'Azure AD Client Secret'
+    key: 'azure_ad_client_secret'
+    kind: anchored
+    severity: HIGH
+    pattern: '(?<![A-Za-z0-9_~.])[A-Za-z0-9_~.]{3}\dQ~[A-Za-z0-9_~.\-]{31,34}(?![A-Za-z0-9_~.\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'Microsoft Entra ID'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const azure_ad_client_secret = \"PwL8Q~GJutVA029qj3EgSaRVNbeexHRV1J0MwA4G\";"
+      - "{\"azure_ad_client_secret\": \"PwL8Q~GJutVA029qj3EgSaRVNbeexHRV1J0MwA4G\"}"
+    negative_examples:
+      - "PwL8Q~GJutVA029qj3Eg"
+  - id: 'ANTHROPIC_KEY_001'
+    name: 'Anthropic API / Admin Key'
+    key: 'anthropic_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_\-]{80,200}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Anthropic'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "ANTHROPIC_API_KEY=sk-ant-api03-b8U7dlSG2ppyneC22iYTiukpSNeA_pO14STpmli8EH6Pwad0lgu5g85DQWcT71lhD3uH4RXJ1LFy0QJY6NKLlygtu9H2VAA"
+      - "\"x-api-key\":\"sk-ant-api03-c8L41iKFT51dRImWXVCbhkNNwJj3WzNLsmbKbwBD3ym9jyGraoVxCuSqXThKrOT-3EHiUoF3P5rJaUnrOr-o1ZKZza3-tKW\""
+      - "ANTHROPIC_ADMIN_KEY=sk-ant-admin01-UPJetQjRkmkD6gitA8PAuGSZbqypSyKD__ojhYLy1fbqliDM_2ayoyfah1oZZqEZ0zQ4mgu-f-L09AyPrfXxdYoDHqOC5AA"
+    negative_examples:
+      - "sk-ant-api03-b8U7dlSG2ppyneC22iYTiukpSNeA_pO14STpmli8EH6Pwad0lgu5g85DQWcT"
+      - "sk-ant-apiXX-c8L41iKFT51dRImWXVCbhkNNwJj3WzNLsmbKbwBD3ym9jyGraoVxCuSqXThKrOT-3EHiUoF3P5rJaUnrOr-o1ZKZza3-tKW"
+  - id: 'SHOPIFY_KEY_001'
+    name: 'Shopify Access / Private App Token'
+    key: 'shopify_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bshp(?:at|pa)_[a-fA-F0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Shopify'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "X-Shopify-Access-Token: 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"
+      - "\"adminToken\":\"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\""
+      - "SHOPIFY_TOKEN=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"
+    negative_examples:
+      - "shpat_1349b7f99e024e0a5d421ccee9f7489\""
+      - "shpat_VmLs0ulH2qxt8ZtpIkFL1CDtHe8olT72"
+  - id: 'SHOPIFY_KEY_002'
+    name: 'Shopify Shared Secret'
+    key: 'shopify_shared_secret'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bshpss_[a-fA-F0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Shopify'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "SHOPIFY_SHARED_SECRET=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"
+      - "\"secret\":\"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\""
+    negative_examples:
+      - "shpss_f3e0ff948076ce5de40a"
+      - "shpss-f3e0ff948076ce5de40a0a1cd92d4822"
+  - id: 'SHOPIFY_KEY_003'
+    name: 'Shopify Custom App Token'
+    key: 'shopify_custom_app'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bshpca_[a-fA-F0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Shopify'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "token = \"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\""
+      - "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"
+    negative_examples:
+      - "shpca_045d13c0d175679a"
+      - "x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"
+  - id: 'HUBSPOT_KEY_001'
+    name: 'HubSpot Private App Token'
+    key: 'hubspot_private_app'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpat-(?:na|eu|ap)\d-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'HubSpot'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const HUBSPOT_TOKEN = \"pat-na1-9b163657-939b-fd47-21c3-5d58719fb4f3\";"
+      - "{\"HUBSPOT_TOKEN\": \"pat-na1-9b163657-939b-fd47-21c3-5d58719fb4f3\"}"
+      - "Authorization: Bearer pat-na1-776aa98e-0cdb-45a8-a4e5-bfc54c38cdb5"
+      - "\"hubspotToken\":\"pat-eu1-5db702bd-59ad-47cf-ae39-f22657c308e5\""
+    negative_examples:
+      - "pat-xyz-12345678-1234-1234-1234-123456789012"
+  - id: 'MAILCHIMP_KEY_001'
+    name: 'Mailchimp API Key'
+    key: 'mailchimp_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b[a-f0-9]{32}-us\d{1,2}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Mailchimp'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "mailchimpKey: \"979e32b3038e270eb2051b4ce15daa4d-us21\""
+      - "MAILCHIMP_API_KEY=b9c1d969222418102d1c59b1894f2013-us6"
+    negative_examples:
+      - "979e32b3038e270eb2051b4ce15daa4d-eu21"
+      - "979e32b3038e270eb2051b4ce15daa4-us21"
+  - id: 'DATABRICKS_KEY_001'
+    name: 'Databricks API Token'
+    key: 'databricks_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdapi[a-f0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Databricks'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "DATABRICKS_TOKEN=dapicc923daf6c06257db17ef7a57b93b56f"
+      - "\"token\":\"dapi64302367559d742a9c230468645dffe1\""
+    negative_examples:
+      - "dapicc923daf6c06257db17ef7a57b93b56\""
+      - "dapiAYB0TBCP82MCSN1B9BD8DD8B9LFDX345"
+  - id: 'GOOGLE_KEY_001'
+    name: 'Google API Key'
+    key: 'google_api_key'
+    kind: anchored
+    severity: MEDIUM
+    pattern: '\bAIza[0-9A-Za-z_\-]{35}(?![0-9A-Za-z_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Google'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const apiKey = \"AIzaDMJYtjp1a5NaF9ALLGPtz9Offdym9U9SyT_\";"
+      - "{\"apiKey\": \"AIzaDMJYtjp1a5NaF9ALLGPtz9Offdym9U9SyT_\"}"
+    negative_examples:
+      - "const AIzaWorkerPoolSizeLimitConfig = 1;"
+  # Covers all IAM principal key ID prefixes: AKIA (user), ASIA (session), AROA (role), AIDA (group)
+  - id: 'AWS_KEY_001'
+    name: 'AWS Access Key ID'
+    key: 'aws_access_key_id'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'AWS'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "aws_access_key_id = AKIATVPKZHQY5NY36YF6"
+      - "{\"AccessKeyId\": \"ABIAZON5LNFNBTEOK3XN\"}"
+    negative_examples:
+      - "\"UserId\": \"AIDAL2PKQR7CAKAP4XHQ\""
+      - "ROLE_ID=AROADATSCSP6VP5KAC3N"
+      - "AKIA0123456789ABCDEF"
+  - id: 'PEM_PRIVKEY_001'
+    name: 'PEM Private Key'
+    key: 'pem_private_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+|ENCRYPTED\s+)?PRIVATE\s+KEY-----(?:\r?\n|\\n)(?:Proc-Type:[^\r\n\\]{1,80}(?:\r?\n|\\n)DEK-Info:[^\r\n\\]{1,120}(?:\r?\n|\\n)(?:\r?\n|\\n)?)?(?:[A-Za-z0-9+/=]{10,76}(?:\r?\n|\\n))+|-----BEGIN PGP PRIVATE KEY BLOCK-----'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Generic (private key)'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "-----BEGIN RSA PRIVATE KEY-----\nOh+Sh4Vkh8Fi9A2ve3D6M8ArHxC/mupb7gIJXORO3E+cZyqGi+jkJ2/dN2hsqYpG\nXmZqpd5oJqtai/TFGh1YnFFIn2SHSG1lLo1PhxxNMtXNE7cwc0/Bnl6YUZMVHfaj\nww4CwrQH5IH3XGR3a+3yUq9VBwkirIc27ZcQly4r7QGXfu1ZzPBzoz3JP3nU89tl\n-----END RSA PRIVATE KEY-----"
+      - "\"private_key\":\"-----BEGIN PRIVATE KEY-----\\nOh+Sh4Vkh8Fi9A2ve3D6M8ArHxC/mupb7gIJXORO3E+cZyqGi+jkJ2/dN2hsqYpG\\nXmZqpd5oJqtai/TFGh1YnFFIn2SHSG1lLo1PhxxNMtXNE7cwc0/Bnl6YUZMVHfaj\\nww4CwrQH5IH3XGR3a+3yUq9VBwkirIc27ZcQly4r7QGXfu1ZzPBzoz3JP3nU89tl\\n-----END PRIVATE KEY-----\\n\""
+      - "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0179289273973785F8803D7CA90CCF76\n\nVvfkruV0zL1+T2rO2eWDelQhrtTWdi4gScZ0AJMahtKe1+fgkKYh66CP8ZrZh6tM\nVvfkruV0zL1+T2rO2eWDelQhrtTWdi4gScZ0AJMahtKe1+fgkKYh66CP8ZrZh6tM\n-----END RSA PRIVATE KEY-----"
+      - "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF13ZgQ87sl9OgIDA+t8GFkf6CPVbDV11uv84VKWsyREabS5Lir1XfqeAWdF\n-----END PGP PRIVATE KEY BLOCK-----"
+    negative_examples:
+      - "-----BEGIN PUBLIC KEY-----\nOh+Sh4Vkh8Fi9A2ve3D6M8ArHxC/mupb7gIJXORO3E+cZyqGi+jkJ2/dN2hsqYpG\nXmZqpd5oJqtai/TFGh1YnFFIn2SHSG1lLo1PhxxNMtXNE7cwc0/Bnl6YUZMVHfaj\nww4CwrQH5IH3XGR3a+3yUq9VBwkirIc27ZcQly4r7QGXfu1ZzPBzoz3JP3nU89tl\n-----END PUBLIC KEY-----"
+      - "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----"
+  # HashiCorp Vault service token (hvs. + 90+ base62url chars)
+  - id: 'VAULT_TOKEN_001'
+    name: 'HashiCorp Vault Service / Batch Token'
+    key: 'vault_service_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bhv[sb]\.[A-Za-z0-9_\-]{90,300}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'HashiCorp Vault'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "VAULT_TOKEN=hvs.LaD4eFUZt1_le4cioZUR3BzOEf3slyZJuVc81XLNRTAYGTu2qG8MMnO2UuRu8CDqqvfSRiUFwC34EZPq7mAn-pT2hjhCO80"
+      - "\"X-Vault-Token\":\"hvs.sxX0P0rGzIxOMiLUWychhNIVnXlSrwJQWjKdHgR959VwN3dBcyTVxfdF6EUjIwlHK82ZPw475o3cvFluKJFGvTPoQ6rPBUD3JkRC\""
+      - "VAULT_TOKEN=hvb.BglyWMfJig9625ueNgSjhSS5ERpz_cUUS95XMZszhuDYnY5UBf1VsTiwW7QOTNS4E6sHYmTRR1n-ycb-a5q4xAdoHmesBz9k4t9O_F5j06Z7BvhmevpnCzyjmmEUCcep1maK8rw_QOhOn_HPZK2WeC"
+    negative_examples:
+      - "hvs.LaD4eFUZt1_le4cioZUR3BzO"
+      - "hvs_LaD4eFUZt1_le4cioZUR3BzOEf3slyZJuVc81XLNRTAYGTu2qG8MMnO2UuRu8CDqqvfSRiUFwC34EZPq7mAn-pT2hjhCO80"
+  # Pulumi access token
+  - id: 'PULUMI_TOKEN_001'
+    name: 'Pulumi Access Token'
+    key: 'pulumi_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpul-[a-f0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Pulumi'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "PULUMI_ACCESS_TOKEN=pul-9e81c6f67f3f92e009a013ad96b816c507c86d4f"
+      - "\"token\":\"pul-91e44432e1cad2f3a3ef8a51ff82fbcf147df119\""
+    negative_examples:
+      - "pul-9e81c6f67f3f92e009a013ad96b816c507c86d4\""
+      - "pul_9e81c6f67f3f92e009a013ad96b816c507c86d4f"
+  # Linear API key
+  - id: 'LINEAR_KEY_001'
+    name: 'Linear API Key'
+    key: 'linear_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\blin_api_[A-Za-z0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Linear'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: lin_api_5KNnH0ZZX3JpSEbqVqV40jCfb1kviDHYRee5s5e7"
+      - "\"linearKey\":\"lin_api_jLUZYf26gDbSYaHVXiVEzDaGfiZfkWEo7wmOd45y\""
+    negative_examples:
+      - "lin_api_5KNnH0ZZX3JpSEbqVqV40jCfb1kviDHYRee5s5e\""
+      - "lin-api-5KNnH0ZZX3JpSEbqVqV40jCfb1kviDHYRee5s5e7"
+  # Notion integration token (old: secret_... / new: ntn_...)
+  - id: 'NOTION_KEY_001'
+    name: 'Notion Integration Token'
+    key: 'notion_integration_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsecret_[A-Za-z0-9]{43}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Notion'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "NOTION_TOKEN=secret_BloeIOVl3je7JHX3r6evRDUjDBTJuCAuQKO2nPTtEhS"
+      - "\"auth\":\"secret_9HzicVaCgQieA2cVbgECxCDCiMmP2Ku1pmscWOWkCEu\""
+    negative_examples:
+      - "secret_BloeIOVl3je7JHX3r6evRDUjDBTJuCAuQKO2nPTtEh\""
+      - "mysecret_BloeIOVl3je7JHX3r6evRDUjDBTJuCAuQKO2nPTtEhS"
+  - id: 'NOTION_KEY_002'
+    name: 'Notion Internal Integration Token'
+    key: 'notion_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bntn_[0-9]{11}[A-Za-z0-9]{35}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Notion'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const NOTION_TOKEN = \"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\";"
+      - "{\"NOTION_TOKEN\": \"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\"}"
+    negative_examples:
+      - "ntn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Netlify personal access token
+  - id: 'NETLIFY_KEY_001'
+    name: 'Netlify Personal Access Token'
+    key: 'netlify_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bnfp_[A-Za-z0-9]{36,}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Netlify'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "NETLIFY_AUTH_TOKEN=nfp_urrowO6tV9aokjDWllZaX1YYlHNyAA68NnxgUQFE"
+      - "\"token\":\"nfp_5jJcHRrMaG9kRQjKBAwsIpWA63Sjf6uxc60c\""
+    negative_examples:
+      - "nfp_urrowO6tV9aokjDWllZaX1YYlHNyAA"
+      - "nfp-urrowO6tV9aokjDWllZaX1YYlHNyAA68NnxgUQFE"
+  # Firebase FCM server key (AAAA + 7 base62url chars + colon + 140 chars)
+  - id: 'FIREBASE_KEY_001'
+    name: 'Firebase FCM Server Key'
+    key: 'firebase_fcm_server_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bAAAA[A-Za-z0-9_\-]{7}:[A-Za-z0-9_\-]{140}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Firebase'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: key=AAAAU84JmHx:APA91bi_n4qkdoqnL6QBFtRLyNdJeSwAG4pqX-QHI_wp83C_Ex2O8BvMzrGawIstYLVTQdv0qjWwiX2iYadSjuogLS-v0DKa-VIbGZV4-Nh3Skde3sUaNi2VfAzWec3V74w9JNvTYIxz"
+      - "\"serverKey\":\"AAAAY70yceF:APA91bw13FmXr2FmeQd3-B1B8YAVU09zHoz6-xmSPdkVDPW-UE82A6oabfUZvTe7DBQ3NKNLMKJMTzPzuA7ivvTbJZp-oW6giQqSPlXVBoPHCSGbWz7KttDpxR2_A7zQ0yX7OOdy6RvB\""
+    negative_examples:
+      - "AAAAU84JmHx:APA91bi_n4qkdoqnL6QBFtRLyNdJeSwAG4pqX-QHI_wp83C_Ex2O8BvMzrGawIstYLVTQdv0qjWwiX2iYadSjuogLS-v0DKa-VIbGZV4-N"
+      - "AAAAU84JmH:APA91bi_n4qkdoqnL6QBFtRLyNdJeSwAG4pqX-QHI_wp83C_Ex2O8BvMzrGawIstYLVTQdv0qjWwiX2iYadSjuogLS-v0DKa-VIbGZV4-Nh3Skde3sUaNi2VfAzWec3V74w9JNvTYIxz"
+  # Airtable Personal Access Token
+  - id: 'AIRTABLE_KEY_001'
+    name: 'Airtable Personal Access Token'
+    key: 'airtable_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpat[A-Za-z0-9]{14}\.[A-Za-z0-9]{64}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Airtable'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer patU4HqQzIvANAid5.MFAzkaYnwHKwj1FRrzqHT85ptJ62GN5GhiJ5huZYlMzjkMJhutKJc63fLtanXTSV"
+      - "\"airtableToken\":\"patBwoZWYsIcntneG.0Mjq6zF44In2VqLXFIKuUN7ddPQP2JTczWGBfxBiM20lOpcOmrdCYac98elMpqWG\""
+    negative_examples:
+      - "patU4HqQzIvANAid.MFAzkaYnwHKwj1FRrzqHT85ptJ62GN5GhiJ5huZYlMzjkMJhutKJc63fLtanXTSV"
+      - "patU4HqQzIvANAid5-MFAzkaYnwHKwj1FRrzqHT85ptJ62GN5GhiJ5huZYlMzjkMJhutKJc63fLtanXTSV"
+  # WooCommerce REST API consumer key / secret
+  - id: 'WOOCOMMERCE_KEY_001'
+    name: 'WooCommerce Consumer Key'
+    key: 'woocommerce_ck'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bck_[a-z0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'WooCommerce'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "consumerKey: \"ck_owdw5t0e9ix197rni0jfjywxv3pid9ojpl4iqj6k\""
+      - "?consumer_key=ck_9oti79fvye2hz6417yycmycfi7bv8g93kg97wcbs&"
+    negative_examples:
+      - "ck_owdw5t0e9ix197rni0jfjywxv3pid9ojpl4iqj6\""
+      - "ck_OWDW5T0E9IX197RNI0JFJYWXV3PID9OJPL4IQJ6K"
+  - id: 'WOOCOMMERCE_KEY_002'
+    name: 'WooCommerce Consumer Secret'
+    key: 'woocommerce_cs'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bcs_[a-z0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'WooCommerce'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "consumerSecret: \"cs_30d4h7bltwd0fe1obnz6kc6tw9e5402jzwuwbadb\""
+      - "&consumer_secret=cs_u92zxczk00w73tcbpgkgacgubcmpoq3jfpi8r6qi"
+    negative_examples:
+      - "cs_30d4h7bltwd0fe1obnz6kc6tw9e540\""
+      - "cs-30d4h7bltwd0fe1obnz6kc6tw9e5402jzwuwbadb"
+  # Discord bot token — three dot-separated base62url segments:
+  # seg1: 23-28 chars (base64url-encoded user ID — no longer limited to M/N/O;
+  # Discord snowflake IDs have grown beyond the range that encodes to those chars)
+  # seg2: 6-7 chars (base64url-encoded token timestamp)
+  # seg3: exactly 27 chars (HMAC digest)
+  # Also covers MFA tokens: mfa. + 20+ base62url chars.
+  # First char of seg1 restricted to [A-Za-z0-9] (not _ or -) since base64url-encoded
+  # integers always start with an alphanumeric character.
+  # ReDoS fix 2026-10-24: lowercase/digit lookaheads limited to the token's own characters (were \S* scans to the next whitespace: quadratic, and satisfied by text after the token).
+  - id: 'DISCORD_TOKEN_001'
+    name: 'Discord Bot Token'
+    key: 'discord_bot_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?=[A-Za-z0-9_.\-]{0,100}?[a-z])(?=[A-Za-z0-9_.\-]{0,100}?[0-9])(?:mfa\.[A-Za-z0-9_\-]{20,}|[A-Za-z0-9][A-Za-z0-9_\-]{22,27}\.[A-Za-z0-9_\-]{6,7}\.[A-Za-z0-9_\-]{27,38})\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Discord'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "client.login(\"MTSBKmr1UGKE20tlybqXf7971u.6pDcRB.LWER6C76xRoEFJoNge2EaUOL2Pr\");"
+      - "Authorization: Bot OD4wzgpaO3tXxVCMEPSoJVwShr.GhEQW7.l8XssXfeQ2YyRUYaATy2MOJz1er"
+      - "DISCORD_TOKEN=MTIl09ylAibDG69yANpZdY94KT.G0pC1h.rASFg_CcMlYhcQizYkglN8CvySPPVvliBOJ6kW"
+    negative_examples:
+      - "MTSBKmr1UGKE20tlybqXf7971u.6pDcRB.LWER6C76xRoEFJoNge2E"
+      - "ABCDEFGHIJKLMNOPQRSTUVWX.ABCDEF.ABCDEFGHIJKLMNOPQRSTUVWXYZA"
+  # Discord incoming webhook URL
+  - id: 'DISCORD_TOKEN_002'
+    name: 'Discord Incoming Webhook URL'
+    key: 'discord_webhook_url'
+    kind: anchored
+    severity: HIGH
+    pattern: 'https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/[0-9]{17,19}/[A-Za-z0-9_\-]{60,68}'
+    source: secretsifter
+    license: MIT
+    provider: 'Discord'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"webhook\":\"https://discord.com/api/webhooks/147890142300901896/TVmOfK7dEke2iilA9ssyXfdSJy-0HB-q0UmmmRv4zf9wXb8-BGqAT1tsZEps8kR1Mj9d\""
+      - "https://discordapp.com/api/webhooks/4822605803888586501/FqRRiNavGY4w_u0K5Dm3JPfp0hQ2WprnB863wq6rTjOHUIMn8KvTodzlzbBF7GJk"
+      - "https://canary.discord.com/api/webhooks/797839268866798020/dBX-1C61GfhomZYDpMgdPxeL3sQeYpKgBHPZLAVa20peGGycDZQdxEgqJkbfOox4trf6"
+    negative_examples:
+      - "https://discord.com/api/webhooks/1478901423/TVmOfK7dEke2iilA9ssyXfdSJy-0HB-q0UmmmRv4zf9wXb8-BGqAT1tsZEps8kR1Mj9d"
+      - "https://discord.com/api/webhooks/147890142300901896/TVmOfK7dEke2iilA9ssyXfdSJy-0HB"
+  # Slack incoming webhook URL
+  - id: 'SLACK_TOKEN_005'
+    name: 'Slack Incoming Webhook URL'
+    key: 'slack_webhook_url'
+    kind: anchored
+    severity: HIGH
+    pattern: 'https://hooks\.slack\.com/(?:services/T[A-Za-z0-9_]{8,11}/B[A-Za-z0-9_]{8,11}/[A-Za-z0-9_]{24}|(?:workflows|triggers)/T[A-Za-z0-9_]{8,11}/A[A-Za-z0-9_]{8,11}/[0-9]{17,19}/[A-Za-z0-9_]{24,32})'
+    source: secretsifter
+    license: MIT
+    provider: 'Slack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"url\":\"https://hooks.slack.com/services/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\""
+      - "SLACK_WEBHOOK=https://hooks.slack.com/services/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"
+      - "webhook: \"https://hooks.slack.com/workflows/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\""
+    negative_examples:
+      - "https://hooks.slack.com/services/TJUX1ARHIWY/BV1MVILK2QV/qswWN8v904AssbyHaDn9"
+      - "https://hooks.slack.com/services/XJUX1ARHIWY/BV1MVILK2QV/qswWN8v904AssbyHaDn9xP2x"
+  # Twitter/X app bearer token (AAA...AAA + 40–130 mixed chars).
+  # Upper bound rejects WebAssembly/binary lookup tables which are hundreds–thousands of A's.
+  # Real Twitter bearer tokens are 60–120 chars total.
+  - id: 'TWITTER_KEY_001'
+    name: 'Twitter/X App Bearer Token'
+    key: 'twitter_bearer_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bAAAAAAAAAAAAAAAAAAAAA(?=[A-Za-z0-9%_\-]{0,130}%)[A-Za-z0-9%_\-]{40,130}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'X (Twitter)'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const TWITTER_BEARER = \"AAAAAAAAAAAAAAAAAAAAAw376A4BDfXeujsIPQHSAh1xLSABkZD%2BPW2uISggjRILFfYb4yO2%3DQVizsIwotGVOyDASsF3box0If7MUFG\";"
+      - "{\"TWITTER_BEARER\": \"AAAAAAAAAAAAAAAAAAAAAw376A4BDfXeujsIPQHSAh1xLSABkZD%2BPW2uISggjRILFfYb4yO2%3DQVizsIwotGVOyDASsF3box0If7MUFG\"}"
+    negative_examples:
+      - "url(data:font/woff2;base64,d09GMgABAAAAAAAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)"
+  # New Relic license key and Insights insert key
+  - id: 'NEWRELIC_KEY_001'
+    name: 'New Relic User API Key'
+    key: 'newrelic_license_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bNRAK-[A-Z0-9]{27}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'New Relic'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "NEW_RELIC_API_KEY=NRAK-6F3XK6KGZNNCUBTAM2L5C3OB4JE"
+      - "\"Api-Key\":\"NRAK-CDQ4340AWBCF9M39KH49UCYQNHH\""
+    negative_examples:
+      - "NRAK-6F3XK6KGZNNCUBTAM2L5C3OB4J\""
+      - "NRAK-6f3xk6kgznncubtam2l5c3ob4je"
+  - id: 'NEWRELIC_KEY_002'
+    name: 'New Relic Insights Insert Key'
+    key: 'newrelic_ingest_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bNRII-[A-Za-z0-9_\-]{32}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'New Relic'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "insertKey: \"NRII-dWlFXxMcn449jn-88gYHgUe-9dP_nhwN\""
+      - "NRII-TedwTHgbpqAa-OJ4AX4mw-YsmFTgnkuE"
+    negative_examples:
+      - "NRII-dWlFXxMcn449jn-88gYHgUe-9dP_nhw\""
+      - "NRIX-dWlFXxMcn449jn-88gYHgUe-9dP_nhwN"
+  - id: 'NEWRELIC_KEY_003'
+    name: 'New Relic License (Ingest) Key'
+    key: 'newrelic_license_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b[a-f0-9]{36}NRAL\b'
+    source: secretsifter
+    license: MIT
+    provider: 'New Relic'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const NEW_RELIC_LICENSE_KEY = \"f10cd0015967404ebab0629ec22859356222NRAL\";"
+      - "{\"NEW_RELIC_LICENSE_KEY\": \"f10cd0015967404ebab0629ec22859356222NRAL\"}"
+    negative_examples:
+      - "NRALaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Dynatrace API token (dt0 + 2-letter type code + 2 digits + dot + 24 + dot + 64)
+  - id: 'DYNATRACE_KEY_001'
+    name: 'Dynatrace API Token'
+    key: 'dynatrace_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdt0[a-z][0-9]{2}\.[A-Z0-9]{24}\.[A-Za-z0-9]{64}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Dynatrace'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const DT_API_TOKEN = \"dt0c01.4PLT53SXHFM9JWDZRZHT5B6P.LuZZ7UFT2ScloIbr0hzN1rlkDi7M5A9SIlRCmn7Ccu2zoDpoMFkwxNBc3qWGe1mJ\";"
+      - "{\"DT_API_TOKEN\": \"dt0c01.4PLT53SXHFM9JWDZRZHT5B6P.LuZZ7UFT2ScloIbr0hzN1rlkDi7M5A9SIlRCmn7Ccu2zoDpoMFkwxNBc3qWGe1mJ\"}"
+      - "Authorization: Api-Token dt0c01.1TX1KG9SL9I1WBROR1HCJWMO.juvQq3NqyrZ2Di0jPRPrxvwLvDAB8cqEHnew2dpexOAPujGUeMMxWTtrStJKZAIC"
+      - "\"token\":\"dt0s16.SYQFGDX6149XO4SCXBW282Q1.YKUkajgfKSEUeBb6EtoE61hvZ0fIAAxCKJLgjQ69SjOue55liu3vRnP0QGFWgP8E\""
+    negative_examples:
+      - "dt0XX99.AAAAAAAAAAAAAAAAAAAAAAAA.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  # Telegram bot API token (numeric bot id + :AA + 33-char key)
+  - id: 'TELEGRAM_KEY_001'
+    name: 'Telegram Bot API Token'
+    key: 'telegram_bot_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '(?<![0-9])[0-9]{8,12}:AA[A-Za-z0-9_\-]{33}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Telegram'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "BOT_TOKEN=\"637168769:AAJmT-WoMhPDf6omVA07NoexVnAZzx5zfbs\""
+      - "https://api.telegram.org/bot6452465943:AAdf0O9E7smckUO8Vos36FxfKWn8ZVhNZSl/sendMessage"
+    negative_examples:
+      - "6452465943:ABdf0O9E7smckUO8Vos36FxfKWn8ZVhNZSl"
+      - "6452465943:AAdf0O9E7smckUO8Vos36FxfKWn8ZVhN\""
+  # Mailgun API key
+  - id: 'MAILGUN_KEY_001'
+    name: 'Mailgun API Key'
+    key: 'mailgun_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '(?<![A-Za-z0-9_\-])key-[a-f0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Mailgun'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "MAILGUN_API_KEY=key-135bd19047a525cea9c69e8ef1ae58b6"
+      - "auth: { user: \"api\", pass: \"key-b61ccdccbdc4b12bbae4fa6fe44a103d\" }"
+    negative_examples:
+      - "key-135bd19047a525cea9c69e8ef1ae58b\""
+      - "monkey-135bd19047a525cea9c69e8ef1ae58b6"
+      - "localStorage.setItem(\"cache-key-a8b6466e04d2132a4585f7b9e13ab4c5\")"
+  # FORMAT UNVERIFIED: the rk./uk. shape comes from the existing rule; confirm against PagerDuty docs during the harvest phase.
+  # PagerDuty REST API key (rk.) and user key (uk.)
+  - id: 'PAGERDUTY_KEY_001'
+    name: 'PagerDuty API Key'
+    key: 'pagerduty_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bu\+[A-Za-z0-9_+\-]{18}(?![A-Za-z0-9_+\-])'
+    license: MIT
+    source: betterleaks
+    provider: 'PagerDuty'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const pagerdutyToken = \"u+VTbIQG_kOTvf9ywbZS\";"
+      - "{\"pagerdutyToken\": \"u+VTbIQG_kOTvf9ywbZS\"}"
+    negative_examples:
+      - "t(\"uk.navigation_headers\")"
+      - "rk.aaaaaaaaaaaaaaaaaa"
+  # Age encryption secret key (bech32 encoded)
+  - id: 'AGE_KEY_001'
+    name: 'Age Encryption Secret Key'
+    key: 'age_secret_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bAGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'age'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "AGE-SECRET-KEY-1W77GPHHQZKG5NYFEDU79KTRDLE9HSXPJW74DSCXNJH455YZU3YGQGH4KRA"
+      - "key: \"AGE-SECRET-KEY-1W77GPHHQZKG5NYFEDU79KTRDLE9HSXPJW74DSCXNJH455YZU3YGQGH4KRA\""
+    negative_examples:
+      - "AGE-SECRET-KEY-1BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+  # Alibaba Cloud Access Key ID
+  - id: 'ALIBABA_KEY_001'
+    name: 'Alibaba Cloud Access Key ID'
+    key: 'alibaba_access_key_id'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bLTAI[A-Za-z0-9]{20}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Alibaba Cloud'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "accessKeyId: \"LTAImNqOREmorGiZD5CYPpSG\""
+      - "ALIBABA_CLOUD_ACCESS_KEY_ID=LTAIENxEcHrG9yytGEzVl3fu"
+    negative_examples:
+      - "LTAImNqOREmorGiZD5CYPpS\""
+      - "XLTAImNqOREmorGiZD5CYPpSG"
+  # Atlassian API token (ATATT / ATCTT prefix — new format)
+  - id: 'ATLASSIAN_KEY_001'
+    name: 'Atlassian API Token'
+    key: 'atlassian_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:ATATT|ATCTT)[A-Za-z0-9_\-]{90,250}(?:=[A-F0-9]{8})?(?![A-Za-z0-9_\-=])'
+    source: secretsifter
+    license: MIT
+    provider: 'Atlassian'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "JIRA_API_TOKEN=ATATT3xFfGF00dS9bYKpoOZV_xF1BPfhc33g102pzQtrMrxJ47yPvU8cra4s8T7loC6USPgaOc9s_rBMZW2dSen8i6vgB21xf3vEhTaiCTRFZ4YD_6l9zLWax9jjmDc7YBtFVBRdxQS7KzBm2FLpcNxXvVcvW-OBH0-D07C-LjeFXzSae9FlhGAJPBbQ7U04=B2C3D4E5"
+      - "\"token\":\"ATCTT3xFfGN0Ru_YwlgxUhmXWonfhbLjwqX7L4aX8HeHqAy7EN8lpa7E0gSQ7TKgzkoo7sBmE0_nRbNIHarCpTjGZEbllrnrIqRcUKK5TgjUDobIQ1-Hgj3CgTJ48ph8-B0z\""
+      - "JIRA_TOKEN=ATATT3xFfGF0fOU6n0kvND8f2fGKr9jdw_6XksSGkS__UhALPJoa7yzqi3WBpMP9-Z-pycDsaVui9bWn6BGYudwCDKZqn-RVmw_Xnhsqd1R0izQWZ33hdKLz062X9BA_WpOLOUsbmlzojs1u6Ffww-lwhzDb9hPzClypw2iuMD6ccN_ZKff-xsoiC9H6kNK7=2E192AD2"
+    negative_examples:
+      - "ATATT3xFfGF00dS9bYKpoOZV_xF1BPfhc33g102pzQtrMrxJ47yPvU8cra4s8T\""
+      - "ATXTT3xFfGF00dS9bYKpoOZV_xF1BPfhc33g102pzQtrMrxJ47yPvU8cra4s8T7loC6USPgaOc9s_rBMZW2dSen8i6vgB21xf3vEhTaiCTRFZ4YD_6l9zLWax9jjmDc7YBtFVBRdxQS7KzBm2FLpcNxXvVcvW-OBH0-D07C-LjeFXzSae9FlhGAJPBbQ7U04"
+  # Contentful Content Management API token
+  - id: 'CONTENTFUL_KEY_001'
+    name: 'Contentful CMA Token'
+    key: 'contentful_cma_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bCFPAT-[A-Za-z0-9_\-]{43}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Contentful'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "CONTENTFUL_MANAGEMENT_TOKEN=CFPAT-lXb1EhOgKya92DKIlwy8vkTKezZvEiwpLA6QmpBlRS1"
+      - "\"accessToken\":\"CFPAT-KffWMNX4D5g07dYJXM6fvqTwzAR_KgYcL4GhvijLToJ\""
+    negative_examples:
+      - "CFPAT-lXb1EhOgKya92DKIlwy8vkTKezZvEiwpLA6QmpBlRS\""
+      - "CFPAT_lXb1EhOgKya92DKIlwy8vkTKezZvEiwpLA6QmpBlRS1"
+  # DigitalOcean personal access token / OAuth token
+  - id: 'DO_KEY_001'
+    name: 'DigitalOcean Personal Access Token'
+    key: 'digitalocean_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdop_v1_[a-f0-9]{64}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'DigitalOcean'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "DIGITALOCEAN_TOKEN=dop_v1_d846e7b17d5d9735179f0ad9536a96688a19a73a42d4148a29d76d516f497b7c"
+      - "Authorization: Bearer dop_v1_c133f7f43935bde7f64960c36c00936931ee9e44618d051ca1ea0642ed027665"
+    negative_examples:
+      - "dop_v1_d846e7b17d5d9735179f0ad9536a96688a19a73a42d4148a29d76d516f497b7\""
+      - "dop_v2_d846e7b17d5d9735179f0ad9536a96688a19a73a42d4148a29d76d516f497b7c"
+  - id: 'DO_KEY_002'
+    name: 'DigitalOcean OAuth Token'
+    key: 'digitalocean_oauth'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdoo_v1_[a-f0-9]{64}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'DigitalOcean'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"oauthToken\":\"doo_v1_22fc168f28350b3930cf3a8813265fc7f311d76f10da17e23096eda36daeefc2\""
+      - "doo_v1_e2cafbd379a630b4414dfbc4c39122475563d0ac92a96d124f2ff0ed86d66ce2"
+    negative_examples:
+      - "doo_v1_22fc168f28350b3930cf3a8813265fc7f311d76f10da17e23096eda36dae\""
+      - "doo_v1_KODQ302H0Y9V2D5RT26LTGUYRLSO71QPHDVZZ94LBIZGZ9CCT2BO0ZG18ZWWKXU4"
+  - id: 'DO_KEY_003'
+    name: 'DigitalOcean Refresh Token'
+    key: 'digitalocean_refresh_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdor_v1_[a-f0-9]{64}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'DigitalOcean'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const DO_REFRESH_TOKEN = \"dor_v1_494ff299455ad97623270f9fd1235ea65beee7adfe4db787b72279a841bb3469\";"
+      - "{\"DO_REFRESH_TOKEN\": \"dor_v1_494ff299455ad97623270f9fd1235ea65beee7adfe4db787b72279a841bb3469\"}"
+    negative_examples:
+      - "dor_v1_aaaaaaaaaaaaaaaaaaaa"
+  # Doppler service token
+  - id: 'DOPPLER_KEY_001'
+    name: 'Doppler Token'
+    key: 'doppler_service_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bdp\.(?:pt|st(?:\.[a-z0-9_\-]+)?|ct|sa|scim|audit)\.[A-Za-z0-9]{40,44}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Doppler'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "DOPPLER_TOKEN=\"dp.st.prd.8Irys0ORyhVLwOPFvMkIQQAE8VdxokyZwzFGDjmwOHy\""
+      - "{\"doppler\": \"dp.pt.wByP1LBh7hxkHcfkv4QXjEoj7qPm112iZl4kh0ISDZn\"}"
+    negative_examples:
+      - "dp.xx.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Duffel travel API access token
+  - id: 'DUFFEL_KEY_001'
+    name: 'Duffel Access Token'
+    key: 'duffel_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bduffel_(?:test|live)_[A-Za-z0-9_\-]{43}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Duffel'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer duffel_live_ih3HzaD7gagYpQkMrsFxFOobUca8_LGYPyJ13iSbJEv"
+      - "\"key\":\"duffel_test_AkbDW6nt3SjVSWDzKUHtHXvj5cOegPoAdOhVuL_76vw\""
+    negative_examples:
+      - "duffel_live_ih3HzaD7gagYpQkMrsFxFOobUca8_LGYPyJ13iSbJE\""
+      - "duffel_prod_ih3HzaD7gagYpQkMrsFxFOobUca8_LGYPyJ13iSbJEv"
+  # EasyPost API keys (live + test)
+  - id: 'EASYPOST_KEY_001'
+    name: 'EasyPost API Key (Live)'
+    key: 'easypost_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bEZAK[A-Za-z0-9]{54}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'EasyPost'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "EASYPOST_API_KEY=EZAKMY3KSmGGPztwMsTGwEdx4Cs769fK0uTif3Z7OLN1BMYRwlDYH7eEHY"
+      - "\"apiKey\":\"EZAKyfwDFFwrfHcDDK73GNWjwgNq2raydvDlzyAmeLc6Qhr9NeLVR7Dpns\""
+    negative_examples:
+      - "EZAKMY3KSmGGPztwMsTGwEdx4Cs769fK0uTif3Z7OLN1BMYRwlDYH7eEH\""
+      - "EZAXMY3KSmGGPztwMsTGwEdx4Cs769fK0uTif3Z7OLN1BMYRwlDYH7eEHY"
+  - id: 'EASYPOST_KEY_002'
+    name: 'EasyPost API Key (Test)'
+    key: 'easypost_test_key'
+    kind: anchored
+    severity: LOW
+    pattern: '\bEZTK[A-Za-z0-9]{54}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'EasyPost'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "EASYPOST_TEST_KEY=EZTKhqqTZeAtoROjj9153FeLoYIRjaSIRefx3l2kTEeCxKAcm7EC9UCet5"
+      - "\"testKey\":\"EZTKEOc4zyEmNLyFNqDK3mKCgJcL7AG63O1CMoCd76Sg4Pkdk7Dw08HNt5\""
+    negative_examples:
+      - "EZTKhqqTZeAtoROjj9153FeLoYIRjaSIRefx3l2kTEeCxKAcm7EC9U\""
+      - "xEZTKhqqTZeAtoROjj9153FeLoYIRjaSIRefx3l2kTEeCxKAcm7EC9UCet5"
+  # Flutterwave payment keys (public + secret, with optional _TEST variant)
+  - id: 'FLUTTERWAVE_KEY_001'
+    name: 'Flutterwave Public Key'
+    key: 'flutterwave_pub_key'
+    kind: anchored
+    severity: LOW
+    pattern: '\bFLWPUBK(?:_TEST)?-[a-fA-F0-9]{32}-X\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Flutterwave'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "public_key: \"FLWPUBK-2c88ca9478239a5b3e3a6bf86afd3293-X\""
+      - "FLWPUBK_TEST-e19845d9c60bcae1a7272d8639fa259e-X"
+    negative_examples:
+      - "FLWPUBK-2c88ca9478239a5b3e3a6bf86afd329-X"
+      - "FLWPUBK-2c88ca9478239a5b3e3a6bf86afd3293-Y"
+  - id: 'FLUTTERWAVE_KEY_002'
+    name: 'Flutterwave Secret Key'
+    key: 'flutterwave_sec_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bFLWSECK(?:_TEST)?-[a-fA-F0-9]{32}-X\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Flutterwave'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "FLW_SECRET_KEY=FLWSECK-c216a171e9fe71021cc0162cbb9574b3-X"
+      - "\"secret\":\"FLWSECK_TEST-d08435bfd5528ded99451189b3def9e6-X\""
+    negative_examples:
+      - "FLWSECK-c216a171e9fe71021cc0162cbb9574-X"
+      - "FLWSECK-c216a171e9fe71021cc0162cbb9574b3-Z"
+  # Frame.io API token
+  - id: 'FRAMEIO_KEY_001'
+    name: 'Frame.io API Token'
+    key: 'frameio_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bfio-u-[A-Za-z0-9\-_=]{64}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Frame.io'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer fio-u-Rw4jiDiTRkhmjpXAob9Y_Hp-fIhpF3Lom2b29GyYWn6q32JR6WBm9DE8YWquhs8I"
+      - "\"token\":\"fio-u-QhzFSIL0Ib-poVDfDKw-Yz73ARgi_RPkaOWGnFVH4Egjrr4k5pZbfV_HJKUHXvXT\""
+    negative_examples:
+      - "fio-u-Rw4jiDiTRkhmjpXAob9Y_Hp-fIhpF3Lom2b29GyYWn6q32JR6WBm9DE8YWquhs8\""
+      - "fio-x-Rw4jiDiTRkhmjpXAob9Y_Hp-fIhpF3Lom2b29GyYWn6q32JR6WBm9DE8YWquhs8I"
+  # Grafana service account token and cloud access token
+  - id: 'GRAFANA_KEY_001'
+    name: 'Grafana Service Account Token'
+    key: 'grafana_sa_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bglsa_[A-Za-z0-9]{32}_[A-Za-z0-9]{8}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Grafana'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "GRAFANA_TOKEN=glsa_YFrRNjGN56TliVEFE724uEiq9VnNYgUX_1525cefc"
+      - "Authorization: Bearer glsa_C2GxcUPH8qdfLa5CAlk3v7ksOBhHEFdW_9125752b"
+    negative_examples:
+      - "glsa_YFrRNjGN56TliVEFE724uEiq9VnNYgU_1525cefc"
+      - "glsa_YFrRNjGN56TliVEFE724uEiq9VnNYgUX-1525cefc"
+  - id: 'GRAFANA_KEY_002'
+    name: 'Grafana Cloud Access Token'
+    key: 'grafana_cloud_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bglc_[A-Za-z0-9+/]{32,}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Grafana'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "GRAFANA_CLOUD_TOKEN=glc_i1H7NbSp4NVMmwwccEL0P02HTF7l7gpomn3kVGTQtL1jOm/THPibA6+LsW8P"
+      - "\"token\":\"glc_rAc2Y14HhbwoZcwyAlzypCmkGDbOjTisCJSlQenN\""
+    negative_examples:
+      - "glc_rAc2Y14HhbwoZcwyAlzy\""
+      - "glc-rAc2Y14HhbwoZcwyAlzypCmkGDbOjTisCJSlQenN"
+  - id: 'GRAFANA_KEY_003'
+    name: 'Grafana API Key (legacy)'
+    key: 'grafana_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\beyJrIjoi[A-Za-z0-9+/]{40,380}={0,2}'
+    source: betterleaks
+    license: MIT
+    provider: 'Grafana'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const GRAFANA_API_KEY = \"eyJrIjoizXSRssUolHwXl/tpzbOKRGRCTAH0sXJkmbALASwgNh9ny3fH8jo/A+sz8pvYo+ErQAI3Do==\";"
+      - "{\"GRAFANA_API_KEY\": \"eyJrIjoizXSRssUolHwXl/tpzbOKRGRCTAH0sXJkmbALASwgNh9ny3fH8jo/A+sz8pvYo+ErQAI3Do==\"}"
+    negative_examples:
+      - "eyJrIjoi"
+  # PlanetScale database credentials
+  - id: 'PSQL_KEY_001'
+    name: 'PlanetScale Database Password'
+    key: 'planetscale_password'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpscale_pw_[A-Za-z0-9\-_.]{43}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'PlanetScale'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "DATABASE_PASSWORD=pscale_pw_ooAU0vXhUDSIdU-pZN7Q-kiLR1jn0klkFUnclpr3pqj"
+      - "\"password\":\"pscale_pw_eDMcVYWMQnHTDsGX7kNVYDQW6KlwALo0qrtY5-WSAu7\""
+    negative_examples:
+      - "pscale_pw_ooAU0vXhUDSIdU-pZN7Q-kiLR1jn0klkFUnclpr3pq\""
+      - "pscale-pw-ooAU0vXhUDSIdU-pZN7Q-kiLR1jn0klkFUnclpr3pqj"
+  - id: 'PSQL_KEY_002'
+    name: 'PlanetScale API Token'
+    key: 'planetscale_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpscale_tkn_[A-Za-z0-9\-_.]{43}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'PlanetScale'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "PLANETSCALE_SERVICE_TOKEN=pscale_tkn_Zajfr-3LOdkk6yCTGVS6DsiSKQ1ylvnN_xRGNOESGnK"
+      - "\"token\":\"pscale_tkn_JApyBuA_e6raupH5eNt5uelW2AehPuqH46lIvX6GVCO\""
+    negative_examples:
+      - "pscale_tkn_Zajfr-3LOdkk6yCTGVS6DsiSKQ1ylvnN_xRGNOES\""
+      - "pscale_tok_Zajfr-3LOdkk6yCTGVS6DsiSKQ1ylvnN_xRGNOESGnK"
+  # Postman API key
+  - id: 'POSTMAN_KEY_001'
+    name: 'Postman API Key'
+    key: 'postman_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bPMAK-[a-fA-F0-9]{24}-[A-Za-z0-9]{34}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Postman'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "X-Api-Key: PMAK-7af78ae8c366c72bfd302827-Gy7OIEZ3VNHans9JbnAnkKsnTS8NJtmDAB"
+      - "\"postmanKey\":\"PMAK-57ac9d43b45c2385c7b79461-X5TRODt4h7L7kIlMQpEYMz9SkSvnRSGld1\""
+    negative_examples:
+      - "PMAK-7af78ae8c366c72bfd30282-Gy7OIEZ3VNHans9JbnAnkKsnTS8NJtmDAB"
+      - "PMAK_7af78ae8c366c72bfd302827-Gy7OIEZ3VNHans9JbnAnkKsnTS8NJtmDAB"
+  # PyPI upload token
+  - id: 'PYPI_KEY_001'
+    name: 'PyPI Upload Token'
+    key: 'pypi_upload_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,200}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'PyPI'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "password = pypi-AgEIcHlwaS5vcmcyfI3wu4khLUnK_ntaQ4CTx_lh_xZsqkxk5DVI7Bu4hmMvgRFudi4FWqmW-_ECogOTur6If7HUSDta2VzLzMuMVcMIN5Uvb0Z7SLbg2StWW6STslvbnSyOkx_hJxkhUnfvkguv1ElHcVs"
+      - "TWINE_PASSWORD=pypi-AgEIcHlwaS5vcmcFGyi70MrJjbzK6StLYuX9IS8MHyaZZv6ze1K8YtSu8oZU6-wd-bc5s1jMn1T"
+    negative_examples:
+      - "pypi-AgEIcHlwaS5vcmcyfI3wu4khLUnK_ntaQ4CTx_lh_xZsq"
+      - "pypi-AgEIcHlwaS5wcmcyfI3wu4khLUnK_ntaQ4CTx_lh_xZsqkxk5DVI7Bu4hmMvgRFudi4FWqmW-_ECogOTur6If7HUSDta2VzLzMuMVcMIN5Uvb0Z7SLbg2StWW6STslvbnSyOkx_hJxkhUnfvkguv1ElHcVs"
+  # SendinBlue / Brevo API key
+  - id: 'SENDINBLUE_KEY_001'
+    name: 'SendinBlue / Brevo API Key'
+    key: 'sendinblue_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxkeysib-[a-f0-9]{64}-[A-Za-z0-9]{16}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Brevo'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "api-key: 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"
+      - "\"brevoKey\":\"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\""
+    negative_examples:
+      - "xkeysib-56654f91cb921795fcbbd1cfab0aa0455bb7b63b5b31c0c2412c944a876d0e9-GwDubkpMP0sFDC0A"
+      - "xkeysib-56654f91cb921795fcbbd1cfab0aa0455bb7b63b5b31c0c2412c944a876d0e96-GwDubkpMP0\""
+  # Shippo shipping API token
+  - id: 'SHIPPO_KEY_001'
+    name: 'Shippo Shipping API Token'
+    key: 'shippo_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bshippo_(?:live|test)_[a-f0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Shippo'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: ShippoToken shippo_live_ba72cc85f687340b418794c9fa0d3ba3b391a1f7"
+      - "\"key\":\"shippo_test_71a1dda9c2d65ff643d3f5aa1029450ed4a25d15\""
+    negative_examples:
+      - "shippo_live_ba72cc85f687340b418794c9fa0d3ba3b391a1f\""
+      - "shippo_prod_ba72cc85f687340b418794c9fa0d3ba3b391a1f7"
+  # Azure Storage connection string (very distinctive multi-field format)
+  # The character class includes '\' because JSON serialisers often escape '/' as '\/',
+  # so the Base64 AccountKey may appear as "abc\/xyz" in raw HTML/JS source text.
+  - id: 'AZURE_CONN_001'
+    name: 'Azure Storage Connection String'
+    key: 'azure_storage_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'DefaultEndpointsProtocol=https?;AccountName=[^;]{1,100};AccountKey=[A-Za-z0-9+/=\\]{60,}'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"AzureWebJobsStorage\":\"DefaultEndpointsProtocol=https;AccountName=prodstore01;AccountKey=N5Qg9qaMze4Yq5gqm0fBBa9S7QCMwUWvicyl8jxtYqZdEggagvN2BCg+jU3XTYhYVqhAlKNIKTjE7+F9kNC5kX==;EndpointSuffix=core.windows.net\""
+      - "DefaultEndpointsProtocol=http;AccountName=media;AccountKey=LSHYdt4Mp10BO3z5n0p6GfJurkdc8xhKlf94oR5OM3spfltQD8SAXkU0YxqUa5CRwWe43zn0tSq4f3z02z4qCi=="
+    negative_examples:
+      - "DefaultEndpointsProtocol=https;AccountName=prodstore01;AccountKey=N5Qg9qaMze4Yq5gqm0fBBa9S7QCMwU"
+      - "DefaultEndpointsProtocol=ftp;AccountName=x;AccountKey=N5Qg9qaMze4Yq5gqm0fBBa9S7QCMwUWvicyl8jxtYqZdEggagvN2BCg+jU3XTYhYVqhAlKNIKTjE7+F9kNC5kX=="
+  # Rubygems API token
+  - id: 'RUBYGEMS_KEY_001'
+    name: 'RubyGems API Token'
+    key: 'rubygems_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\brubygems_[a-f0-9]{48}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'RubyGems'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "GEM_HOST_API_KEY=rubygems_afb4ef8455658cb44bdd005e3f0e64af20d8fb0472890b59"
+      - "\":rubygems_api_key: rubygems_7bdeb1c5d4eff8dc7d6b940c06dd434455c25ac66f24b0bc\""
+    negative_examples:
+      - "rubygems_afb4ef8455658cb44bdd005e3f0e64af20d8fb0472890b5\""
+      - "rubygems-afb4ef8455658cb44bdd005e3f0e64af20d8fb0472890b59"
+  # Hugging Face user/org API token
+  - id: 'HF_KEY_001'
+    name: 'Hugging Face API Token'
+    key: 'huggingface_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bhf_[A-Za-z0-9]{34}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Hugging Face'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "HF_TOKEN=hf_1HzDZwdAAc3ENdjNv2waKW1c3fkwwtgAcD"
+      - "Authorization: Bearer hf_wC7j0jWCEvGW6XuR1GkPeGBjjq3ZAHHDAj"
+    negative_examples:
+      - "hf_1HzDZwdAAc3ENdjNv2waKW1c3fkwwtgAc\""
+      - "shf_1HzDZwdAAc3ENdjNv2waKW1c3fkwwtgAcD"
+  # Groq API key
+  - id: 'GROQ_KEY_001'
+    name: 'Groq API Key'
+    key: 'groq_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bgsk_[A-Za-z0-9]{52}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Groq'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "GROQ_API_KEY=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"
+      - "\"apiKey\":\"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\""
+    negative_examples:
+      - "gsk_pihWgVUszAKJyBtqmJ2eYlU7aGhDBMrh3nd8VlnskuSSUpUQtsx\""
+      - "gsk-pihWgVUszAKJyBtqmJ2eYlU7aGhDBMrh3nd8VlnskuSSUpUQtsxs"
+  # Replicate API token
+  - id: 'REPLICATE_KEY_001'
+    name: 'Replicate API Token'
+    key: 'replicate_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\br8_[A-Za-z0-9]{37}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Replicate'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const REPLICATE_API_TOKEN = \"r8_2tgvab0gtiYAiFegNv42azmGyJnamHnwyllkD\";"
+      - "{\"REPLICATE_API_TOKEN\": \"r8_2tgvab0gtiYAiFegNv42azmGyJnamHnwyllkD\"}"
+    negative_examples:
+      - "r8_aaaaaaaaaaaaaaaaaaaa"
+  # xAI / Grok API key
+  - id: 'XAI_KEY_001'
+    name: 'xAI / Grok API Key'
+    key: 'xai_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bxai-[A-Za-z0-9]{80}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'xAI'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "XAI_API_KEY=xai-hFfJliLZNtggFy3Nil3FWA3UXfrUYEQlyPb1M1Cppp4oPI2j5flu2C5BXVnwmEHsknvf1OSWDnGhbqr6"
+      - "\"apiKey\":\"xai-Y5b8aMPsx2GpA7e5pNKjSpXe4jRRgHzcK1C3Ips2KogiA5sdn6WRTxnJoSzBwiKkMeSK4xP0zkEcaQyi\""
+    negative_examples:
+      - "xai-hFfJliLZNtggFy3Nil3FWA3UXfrUYEQlyPb1M1Cppp4oPI2j5flu2C5BXVnwmEHsknvf1OSWDnGhbqr\""
+      - "xai_hFfJliLZNtggFy3Nil3FWA3UXfrUYEQlyPb1M1Cppp4oPI2j5flu2C5BXVnwmEHsknvf1OSWDnGhbqr6"
+  # Buildkite access token
+  - id: 'BUILDKITE_KEY_001'
+    name: 'Buildkite Access Token'
+    key: 'buildkite_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bbkua_[A-Za-z0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Buildkite'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "BUILDKITE_API_TOKEN=bkua_x0LJkqq5Di9MKPCvbU81DofvBmclVRycjkM0I05p"
+      - "Authorization: Bearer bkua_Muwhd9pSRafCqCvcVgUBskbeGgWe3kKtec4Ed4uj"
+    negative_examples:
+      - "bkua_x0LJkqq5Di9MKPCvbU81DofvBmclVRycjkM0I05\""
+      - "bkub_x0LJkqq5Di9MKPCvbU81DofvBmclVRycjkM0I05p"
+  # Tailscale API key
+  - id: 'TAILSCALE_KEY_001'
+    name: 'Tailscale API Key'
+    key: 'tailscale_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\btskey-(?:api|auth|client)-[A-Za-z0-9_\-]{20,64}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Tailscale'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "TS_API_KEY=tskey-api-x7j5Cp2x0_XEHlwzFq7YXk1oJjMofNA5"
+      - "\"key\":\"tskey-api-nRPlF1FZYGMjqqAP9k5VoHeG5K5ht1Ve\""
+      - "TS_AUTHKEY=tskey-auth-kRhA6mWtTydCNTRL-9XNFBiTJwxrzgNyOMiNM61qpi72P9EUpZ"
+    negative_examples:
+      - "tskey-api-short"
+      - "tskey-xyz-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Fly.io bearer token (FlyV1 prefix)
+  - id: 'FLYIO_KEY_001'
+    name: 'Fly.io Auth Token'
+    key: 'flyio_auth_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bFlyV1\s+[A-Za-z0-9+/=_\-]{40,}'
+    source: secretsifter
+    license: MIT
+    provider: 'Fly.io'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: FlyV1 fm2_whCr86mL4FG5NvMTYZGUjZcvD8y6RiBTmcaXtfuzqyAZVdWfu6L0fSU5ssuf9OWCAfz8IBhBPfDxhUNuieelVRCSVQDDkg9nQnbv04UrVLRqPL9c/vT5E1/P"
+      - "FLY_API_TOKEN=\"FlyV1 DRinhcvX4aTbg7SQNKVfeF1xmEMc4pdv1by_MALPeydyOdLeV3cYVlKHXlaGJj9zfWBgMn4ZvjJiS3Os\""
+    negative_examples:
+      - "FlyV1 DRinhcvX4aTbg7SQNKVfeF1xmEMc4p\""
+      - "FlyV2 DRinhcvX4aTbg7SQNKVfeF1xmEMc4pdv1by_MALPeydyOdLeV3cYVlKHXlaGJj9zfWBgMn4ZvjJiS3Os"
+  # LangSmith / LangChain personal API key
+  - id: 'LANGSMITH_KEY_001'
+    name: 'LangSmith API Key'
+    key: 'langsmith_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'LangSmith'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "LANGSMITH_API_KEY=\"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\""
+      - "{\"langsmith\": \"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\"}"
+    negative_examples:
+      - "lsv2_pt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Langfuse secret key (sk-lf- + UUID)
+  - id: 'LANGFUSE_KEY_001'
+    name: 'Langfuse Secret Key'
+    key: 'langfuse_secret_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk-lf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Langfuse'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "LANGFUSE_SECRET_KEY=sk-lf-5351d069-3e1f-41b7-afa0-5993f1e01191"
+      - "\"secretKey\":\"sk-lf-16da7c5a-e31b-4fe5-ad2c-2f3d5d74ea2e\""
+    negative_examples:
+      - "pk-lf-5351d069-3e1f-41b7-afa0-5993f1e01191"
+      - "sk-lf-5351d069-3e1f-41b7-afa0-5993f1"
+  # Okta SSWS API Token — real format is "SSWS " followed by 40-48 alphanumeric chars
+  - id: 'OKTA_KEY_001'
+    name: 'Okta SSWS API Token'
+    key: 'okta_ssws_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bSSWS\s+[A-Za-z0-9_\-]{40,48}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Okta'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: SSWS 003Pr3rMzfnnDK9SyUwoDoQ2wCe-2RE1msq0lJnmUb"
+      - "\"okta\":\"SSWS Ozk-R1fzhCQBftZLlUrSS6_jvT2DPion5cZ8gEPW-f\""
+    negative_examples:
+      - "SSWS 3Pr3rMzfnnDK9SyUwoDoQ2wCe-2RE1\""
+      - "SSWX 3Pr3rMzfnnDK9SyUwoDoQ2wCe-2RE1msq0lJnmUbBL"
+    missed_examples:
+      - "okta_api_token = \"00Z78b9HlThVhK9T_gsQzGd6rPPydteWEC5jAmBfBL\""
+  # CircleCI Personal API Token — "ccipat_" prefix + 40+ alphanumeric chars
+  - id: 'CIRCLECI_KEY_001'
+    name: 'CircleCI Personal API Token'
+    key: 'circleci_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bCCIPAT_[A-Za-z0-9]{22}_[a-f0-9]{40}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'CircleCI'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const CIRCLE_TOKEN = \"CCIPAT_GVE8NgjeXgaULHBX9JjjqH_1d27cf4b20bd604c1750cd3145324f22e951eda4\";"
+      - "{\"CIRCLE_TOKEN\": \"CCIPAT_GVE8NgjeXgaULHBX9JjjqH_1d27cf4b20bd604c1750cd3145324f22e951eda4\"}"
+    negative_examples:
+      - "ccipat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Terraform Cloud API Token — "at." prefix + 90+ alphanumeric chars
+  - id: 'TERRAFORM_KEY_001'
+    name: 'Terraform Cloud API Token'
+    key: 'terraform_cloud_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_=\-]{60,70}(?![A-Za-z0-9_=\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'HashiCorp Terraform'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const TFC_TOKEN = \"N0JUDyyhwx9mLY.atlasv1.oI2ZNSB3h-5XFaQ1wDMNXmmO-FYMMCoZs52H_iL-XcEvcQMscTd99EgwTMTAJNwDSw\";"
+      - "{\"TFC_TOKEN\": \"N0JUDyyhwx9mLY.atlasv1.oI2ZNSB3h-5XFaQ1wDMNXmmO-FYMMCoZs52H_iL-XcEvcQMscTd99EgwTMTAJNwDSw\"}"
+    negative_examples:
+      - "at.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # Sentry Auth Token — "sntrys_" prefix + 64+ alphanumeric chars
+  - id: 'SENTRY_KEY_001'
+    name: 'Sentry Org Token'
+    key: 'sentry_auth_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsntrys_eyJ[A-Za-z0-9+/=_]{40,400}(?![A-Za-z0-9+/=_])'
+    source: secretsifter
+    license: MIT
+    provider: 'Sentry'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const SENTRY_AUTH_TOKEN = \"sntrys_eyJpYXQiOjE3MDAwMDAwMDAuMCwidXJsIjoiaHR0cHM6Ly9zZW50cnkuaW8iVKykmISYl+mHhL/+5A0oRo1eEAExyC/Cjp8lXwDF==_LYpZAQGfaq8zL6y4Y08ng7P46ob7KUeA14Sgnv3qvrh\";"
+      - "{\"SENTRY_AUTH_TOKEN\": \"sntrys_eyJpYXQiOjE3MDAwMDAwMDAuMCwidXJsIjoiaHR0cHM6Ly9zZW50cnkuaW8iVKykmISYl+mHhL/+5A0oRo1eEAExyC/Cjp8lXwDF==_LYpZAQGfaq8zL6y4Y08ng7P46ob7KUeA14Sgnv3qvrh\"}"
+    negative_examples:
+      - "sntrys_V8MVElkFFbjab3i91cACXvJmpM2lz9G92SVd0cPxVaGWjFgXEbl1ZGXch8twLha\""
+      - "sntryx_V8MVElkFFbjab3i91cACXvJmpM2lz9G92SVd0cPxVaGWjFgXEbl1ZGXch8twLhaDvb1X3UBo2kqHvEPs"
+  - id: 'SENTRY_KEY_002'
+    name: 'Sentry User Token'
+    key: 'sentry_user_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsntryu_[a-f0-9]{64}\b'
+    source: betterleaks
+    license: MIT
+    provider: 'Sentry'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const SENTRY_TOKEN = \"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\";"
+      - "{\"SENTRY_TOKEN\": \"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\"}"
+      - "SENTRY_AUTH_TOKEN=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"
+    negative_examples:
+      - "sntryu_aaaaaaaaaaaaaaaaaaaa"
+  # Figma Personal Access Token — "figd_" prefix + 43 chars
+  - id: 'FIGMA_KEY_001'
+    name: 'Figma Personal Access Token'
+    key: 'figma_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bfigd_[A-Za-z0-9_\-]{38,43}(?![A-Za-z0-9_\-])'
+    license: MIT
+    source: betterleaks
+    provider: 'Figma'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "X-Figma-Token: figd_P3Cn_Gqd3-40L1SuFjfH--Z4DGi3ctE0wOZmjzRvmQw"
+      - "\"figmaToken\":\"figd_aNI0-6gNijG9MLAZ0aGoU2m6Daeau34tOVTTx_x3PNh\""
+    negative_examples:
+      - "figd_short"
+  # Dropbox Access Token — "sl." prefix + 130+ chars
+  - id: 'DROPBOX_KEY_001'
+    name: 'Dropbox Access Token'
+    key: 'dropbox_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsl\.[A-Za-z0-9\-_]{130,}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Dropbox'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer sl.RiXdNWA3UW2yBTOuA6YpFxBgoC_kKWRDQlMAWbfXqmvswSvlRb99LtwDjAReHn12FjEoRAY8y-fT9PBDprTC4V7FnUHuETHYMs1QqlxpZ50ILvRz9yTPjjis1rCeYr3NhjC9tTL86jQA"
+      - "\"accessToken\":\"sl.G4fL5BvpeIswppT8ChzClJ2DBP7Pe6qcu9wj753DVYiGOj5iHi0We4gnm-jhiPOiYJKxJWjZQbx8i7Y5SYaRGRNrGSJ9nsHs0ulgKXB1j6OxGuPzkG4DVtDMOBPOYROiALEfkW4\""
+    negative_examples:
+      - "sl.G4fL5BvpeIswppT8ChzClJ2DBP7Pe6qcu9wj753DVYiGOj5iHi0We4gnm-jh\""
+      - "sl_G4fL5BvpeIswppT8ChzClJ2DBP7Pe6qcu9wj753DVYiGOj5iHi0We4gnm-jhiPOiYJKxJWjZQbx8i7Y5SYaRGRNrGSJ9nsHs0ulgKXB1j6OxGuPzkG4DVtDMOBPOYROiALEfkW4oS-Hf"
+  # Square Access Token — "sq0atp-" prefix + 22+ chars
+  - id: 'SQUARE_KEY_001'
+    name: 'Square Access Token'
+    key: 'square_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:EAAA|sq0atp-)[A-Za-z0-9_\-]{22,60}(?![A-Za-z0-9_\-])'
+    license: MIT
+    source: betterleaks
+    provider: 'Square'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer sq0atp-NGKCXoguOGCFflUWJmpme5"
+      - "\"accessToken\":\"sq0atp-x8GAkVwMnua2l9FPK7qbuj\""
+      - "Authorization: Bearer EAAAl7PO-lzJ6NIg4pFIbLLLY1ckfu3k_WAHaK3rI-kHysxo6LjtaEuZFX2eIP6p"
+    negative_examples:
+      - "sq0atp-NGKCXoguOGCFflUWJmpme\""
+      - "sq0atx-NGKCXoguOGCFflUWJmpme5"
+  # Stripe Publishable Key (Live) — low severity: Stripe designs this to be public,
+  # but exposes Stripe account identity and enables card-validity probing.
+  - id: 'STRIPE_KEY_004'
+    name: 'Stripe Publishable Key (Live)'
+    key: 'stripe_pub_key_live'
+    kind: anchored
+    severity: LOW
+    pattern: '\bpk_live_[A-Za-z0-9]{24,200}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Stripe'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Stripe(\"pk_live_51IeSEO3q26BAi02fWM6SwQsIOcpiPqLPARVl6pVrSIkpaCVZYSKcEyG6RIj4nHUGWjsapgjSRX1g7v4iPT9m6HHOCrLKOhvBRNiV\")"
+      - "STRIPE_PUBLISHABLE_KEY=pk_live_1GDIlNVlzAERagpwQeZqejGn"
+    negative_examples:
+      - "pk_live_1GDIlNVlzAERagpwQeZqejG\""
+      - "pk_life_1GDIlNVlzAERagpwQeZqejGnK2HSJop6DzN6Wz6V"
+  # Stripe Publishable Key (Test) — informational: test environment, zero financial impact
+  - id: 'STRIPE_KEY_006'
+    name: 'Stripe Publishable Key (Test)'
+    key: 'stripe_pub_key_test'
+    kind: anchored
+    severity: INFORMATION
+    pattern: '\bpk_test_[A-Za-z0-9]{24,200}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Stripe'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "loadStripe(\"pk_test_51Ijay5pwLMN5SFHjM0cI7bPdiMOavLAQVEYxh9BUAL2n0fmv7a2Vp5wfwH5wPgEsUPT2N1TQIRXxpuDuSZqw4iHdFOkR6VVN2xmn\")"
+      - "pk_test_ZdGMROIvPQYFXojHcjymwrdV9kY6cr"
+    negative_examples:
+      - "pk_test_ZdGMROIvPQYFXojHcjym\""
+      - "pk_tst_ZdGMROIvPQYFXojHcjymwrdV9kY6cr"
+  # Cloudinary API URL — contains API key + secret embedded in URL
+  - id: 'CLOUDINARY_KEY_001'
+    name: 'Cloudinary API URL'
+    key: 'cloudinary_api_url'
+    kind: anchored
+    severity: HIGH
+    pattern: 'cloudinary://[0-9]{6,}:[A-Za-z0-9_\-]{20,}@[a-z0-9_\-]+'
+    source: secretsifter
+    license: MIT
+    provider: 'Cloudinary'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "CLOUDINARY_URL=cloudinary://596122125198953:C8KYJKgCbMqhtXfAN96mZrLl-N4@mycloud"
+      - "\"url\":\"cloudinary://654339471454:ii9VFoiHEkSnD7yy_hsfWYBdUWT@demo\""
+    negative_examples:
+      - "cloudinary://59612:C8KYJKgCbMqhtXfAN96mZrLl-N4@mycloud"
+      - "cloudinary://596122125198953:C8KYJKgCbM@mycloud"
+  # Microsoft Teams Incoming Webhook URL
+  - id: 'TEAMS_WEBHOOK_001'
+    name: 'Microsoft Teams Webhook URL'
+    key: 'teams_webhook_url'
+    kind: anchored
+    severity: HIGH
+    pattern: 'https://[a-z0-9]+\.webhook\.office\.com/webhookb2/[A-Za-z0-9\-@/]{20,}'
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Teams'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"webhookUrl\":\"https://contoso.webhook.office.com/webhookb2/3e6b83a8-6bc6-4126-a78b-7f613df5480d@73c81842-ba95-49ab-afec-631ca053d695/IncomingWebhook/b92c1f99758957dfcaf4fd38da27cc04/1ca0bac9-ee94-4d85-a0cd-66a26bd9d5e8\""
+      - "https://acme.webhook.office.com/webhookb2/527b4ea3-4501-4145-a4a3-7b03acbc8a2e@a7877001-7d39-4f7a-a979-4f1e1271cbb4"
+    negative_examples:
+      - "https://contoso.webhook.office.com/webhookb2/3e6b83a86b"
+      - "https://contoso.office.com/webhookb2/3e6b83a8-6bc6-4126-a78b-7f613df5480d"
+  # JSON Web Token (JWT) — three base64url segments separated by dots
+  # Gated by minimum segment lengths to avoid matching short nonces/UUIDs
+  - id: 'JWT_TOKEN_001'
+    name: 'JSON Web Token (JWT)'
+    key: 'jwt_token'
+    kind: anchored
+    severity: MEDIUM
+    pattern: '(?<![A-Za-z0-9_\-.])eyJ[A-Za-z0-9_\-]{10,2048}+\.[A-Za-z0-9_\-]{2,16384}+\.[A-Za-z0-9_\-]{10,4096}+(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Generic (JWT)'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"id_token\":\"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxjqzkloJmPi4Q4OaV05mtskXzPUBxZ1_57hYoitBIZ2xCIWf01ZahDCVM5ZzU.ODWUBCN-u5Xbq04D2IzrWxrkpYoOrRd-VCb50y8ZzVb9MaahB4BrvjVJZfIAHFiVYP3tbPTeEhodNwMo4ZFS_j\""
+      - "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoippoc0d6y3MoRtaC_Ah6ZYlcvVk_liH4SCfYO6DvQ._IbNw8A14WsjdWoFM_hBU5Vd_i53fmfv3I-czHC6bfn"
+    negative_examples:
+      - "eyJhbGciOiJIUzI1NiJ9.onlytwosegments"
+      - "eyJhbGciOiJIUzI1NiJ9.."
+  # Mapbox access tokens are always JWTs — their payload starts with "eyJ" (base64-encoded "{").
+  # "tk." is a common JS variable/namespace prefix, NOT a Mapbox token prefix — exclude it.
+  - id: 'MAPBOX_KEY_001'
+    name: 'Mapbox Secret / Temporary Token'
+    key: 'mapbox_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:sk|tk)\.eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}'
+    source: secretsifter
+    license: MIT
+    provider: 'Mapbox'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const MAPBOX_SECRET = \"sk.eyJE9QX-Ksf2jLJOUr1FZ33cGiTF3RVu78rUFHZSvWcmlez0LjIPDFHU6k21l2e.c0vJlW5XjABuXnJllvasXf\";"
+      - "{\"MAPBOX_SECRET\": \"sk.eyJE9QX-Ksf2jLJOUr1FZ33cGiTF3RVu78rUFHZSvWcmlez0LjIPDFHU6k21l2e.c0vJlW5XjABuXnJllvasXf\"}"
+    negative_examples:
+      - "pk.eyJSPvX0zWljxVORZoa58XNjmc4htILq_A7x5FN9zM5gC4ngjAnWQnDLCUpUEFK.HFg1Wj_2hOr1hCzs5b3gqS"
+  # Mapbox pk. tokens are public by design (browser maps); sk./tk. are secret
+  - id: 'MAPBOX_KEY_002'
+    name: 'Mapbox Public Token'
+    key: 'mapbox_public_token'
+    kind: anchored
+    severity: LOW
+    pattern: '\bpk\.eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}'
+    source: secretsifter
+    license: MIT
+    provider: 'Mapbox'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const mapboxAccessToken = \"pk.eyJSPvX0zWljxVORZoa58XNjmc4htILq_A7x5FN9zM5gC4ngjAnWQnDLCUpUEFK.HFg1Wj_2hOr1hCzs5b3gqS\";"
+      - "{\"mapboxAccessToken\": \"pk.eyJSPvX0zWljxVORZoa58XNjmc4htILq_A7x5FN9zM5gC4ngjAnWQnDLCUpUEFK.HFg1Wj_2hOr1hCzs5b3gqS\"}"
+    negative_examples:
+      - "sk.eyJE9QX-Ksf2jLJOUr1FZ33cGiTF3RVu78rUFHZSvWcmlez0LjIPDFHU6k21l2e.c0vJlW5XjABuXnJllvasXf"
+  # Apify API token
+  - id: 'APIFY_KEY_001'
+    name: 'Apify API Token'
+    key: 'apify_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bapify_api_[A-Za-z0-9]{34,38}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Apify'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const APIFY_TOKEN = \"apify_api_xW4i48K4sZne3YQSBW78kTphE8e524vpXht9\";"
+      - "{\"APIFY_TOKEN\": \"apify_api_xW4i48K4sZne3YQSBW78kTphE8e524vpXht9\"}"
+    negative_examples:
+      - "apify_api_aaaaaaaaaaaaaaaaaaaa"
+  # Asana Personal Access Token — 1/numericId:32hexchars
+  - id: 'ASANA_KEY_001'
+    name: 'Asana Personal Access Token'
+    key: 'asana_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b[12]/[0-9]{15,20}(?:/[0-9]{15,20})?:[a-f0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Asana'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer 1/9921848910948395:707bee37712c0b7bd3a019a1fa8c724a"
+      - "\"asanaPat\":\"1/2170499822775305:024966534db77f25e043a9a7db95ace9\""
+      - "ASANA_PAT=2/4887979006906143/3129431227541468:c88e449f85084ea656c5a9ab83ef43d8"
+    negative_examples:
+      - "1/9921848910:707bee37712c0b7bd3a019a1fa8c724a"
+      - "1/9921848910948395:707bee37712c0b7bd3a019a1fa8c724\""
+  # Elastic Cloud / Enterprise API key — "ApiKey " + base64
+  - id: 'ELASTIC_KEY_001'
+    name: 'Elastic API Key'
+    key: 'elastic_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bApiKey\s+(?=[A-Za-z0-9+/]*[0-9])[A-Za-z0-9+/]{20,}={0,2}'
+    source: secretsifter
+    license: MIT
+    provider: 'Elastic'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: ApiKey s5horv1XLXtOVLjgDh4c6R49Idh0jKlUa/j7VnW5dCDz3qsS4Nk5eJRG27=="
+      - "\"headers\":{\"Authorization\":\"ApiKey CRyRMejfx5BHT4GIS5gKD34aMPBvqtkdaheE88MO\"}"
+    negative_examples:
+      - "ApiKey CRyRMejfx5\""
+      - "ApiToken CRyRMejfx5BHT4GIS5gKD34aMPBvqtkdaheE88MO"
+      - "throw new Error(\"Invalid ApiKey AuthenticationHandlerOptions\")"
+  # Google OAuth 2.0 Client ID (apps.googleusercontent.com)
+  - id: 'GOOGLE_KEY_002'
+    name: 'Google OAuth 2.0 Client ID'
+    key: 'google_oauth_client_id'
+    kind: anchored
+    severity: LOW
+    pattern: '\b[0-9]{12}-[a-z0-9]{32}\.apps\.googleusercontent\.com\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Google'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "client_id: \"459495306785-pn4l46lbw0lrqhmqmly4o1zkxlf4ktbb.apps.googleusercontent.com\""
+      - "\"clientId\":\"717744408789-vt70035kk4beim49njhagexpenukbc6h.apps.googleusercontent.com\""
+    negative_examples:
+      - "45949530678-pn4l46lbw0lrqhmqmly4o1zkxlf4ktbb.apps.googleusercontent.com"
+      - "459495306785-pn4l46lbw0lrqhmqmly4o1zkxlf4ktbb.apps.example.com"
+  # Square OAuth token — "sq0idp-" prefix (distinct from sq0atp- access token)
+  - id: 'SQUARE_KEY_002'
+    name: 'Square Application ID (public)'
+    key: 'square_oauth_token'
+    kind: anchored
+    severity: LOW
+    pattern: '\bsq0idp-[A-Za-z0-9\-_]{22}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Square'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "applicationId: \"sq0idp-qAWKhANYGC0dDrhCC4mQWf\""
+      - "\"appId\":\"sq0idp-svoloj7AEHN18YZ5lt9z6y\""
+    negative_examples:
+      - "sq0idp-qAWKhANYGC0dDrhCC4mQW\""
+      - "sq0idx-qAWKhANYGC0dDrhCC4mQWf"
+  - id: 'SQUARE_KEY_003'
+    name: 'Square OAuth Secret'
+    key: 'square_oauth_secret'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsq0csp-[A-Za-z0-9_\-]{43}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Square'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const squareOAuthSecret = \"sq0csp-Epi6fG4k3gbqu8JZLdtKf0vTYvLxD_iRA0Kx2xoO1fN\";"
+      - "{\"squareOAuthSecret\": \"sq0csp-Epi6fG4k3gbqu8JZLdtKf0vTYvLxD_iRA0Kx2xoO1fN\"}"
+    negative_examples:
+      - "sq0csp-short"
+  # Azure Application Insights connection string
+  - id: 'AZURE_CONN_002'
+    name: 'Azure App Insights Connection String'
+    key: 'azure_app_insights_conn'
+    kind: anchored
+    severity: LOW
+    pattern: 'InstrumentationKey=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"ConnectionString\":\"InstrumentationKey=ae48ddc6-466b-4271-a290-93465f8e08fc;IngestionEndpoint=https://eastus-8.in.applicationinsights.azure.com/\""
+      - "instrumentationkey=d92eb0c7-75ba-4351-a40e-10027bad1668"
+    negative_examples:
+      - "InstrumentationKey=ae48ddc6-466b-4271-a290-93465f"
+      - "InstrumentationId=ae48ddc6-466b-4271-a290-93465f8e08fc"
+  # IoT Hub: HostName=X.azure-devices.net;SharedAccessKeyName=Y;SharedAccessKey=<base64>
+  - id: 'AZURE_CONN_003'
+    name: 'Azure IoT Hub Connection String'
+    key: 'azure_iot_hub_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'HostName=[^;]{1,100}\.azure-devices\.net[^;]{0,20};SharedAccessKeyName=[^;]{1,100};SharedAccessKey=([A-Za-z0-9+/=\\]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "HostName=factory-hub.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=2mkpqgx+UNmDXRmRtHzW3fgoOLFN3DQ5OT9URmj88j0="
+      - "\"iot\":\"HostName=plant.azure-devices.net;SharedAccessKeyName=service;SharedAccessKey=CKqHIkZCWi8IgjTJWDSgUAkQ/9/+f1XdarUE3lPBboR=\""
+    negative_examples:
+      - "HostName=factory-hub.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=2mkpqgx+UN"
+      - "HostName=factory-hub.example.net;SharedAccessKeyName=iothubowner;SharedAccessKey=2mkpqgx+UNmDXRmRtHzW3fgoOLFN3DQ5OT9URmj88j0="
+  # Event Hub / Service Bus: Endpoint=sb://X.servicebus.windows.net/;SharedAccessKeyName=Y;SharedAccessKey=<base64>
+  # [^;]{0,15} skips the "sb://" or "sb:\/" part without explicit slash handling
+  - id: 'AZURE_CONN_004'
+    name: 'Azure Event Hub / Service Bus Conn String'
+    key: 'azure_eventhub_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'Endpoint=sb:[^;]{0,15}\.servicebus\.windows\.net[^;]{0,30};SharedAccessKeyName=[^;]{1,100};SharedAccessKey=([A-Za-z0-9+/=\\]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Endpoint=sb://orders-ns.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=Tj6DUWYSZF2JCFXd6z3UYUrzDpC3EnT4MLXVUACbO9v="
+      - "\"bus\":\"Endpoint=sb://events.servicebus.windows.net/;SharedAccessKeyName=send;SharedAccessKey=4tp1NLVZYtvRQAcYs5s2nujETRSL0/Yh9+dTDQMxZYq=\""
+    negative_examples:
+      - "Endpoint=sb://orders-ns.servicebus.windows.net/;SharedAccessKeyName=Root;SharedAccessKey=Tj6DUWYSZF"
+      - "Endpoint=https://orders-ns.servicebus.windows.net/;SharedAccessKeyName=Root;SharedAccessKey=Tj6DUWYSZF2JCFXd6z3UYUrzDpC3EnT4MLXVUACbO9v="
+  # Cosmos DB: AccountEndpoint=https://X.documents.azure.com:443/;AccountKey=<base64>
+  - id: 'AZURE_CONN_005'
+    name: 'Azure Cosmos DB Connection String'
+    key: 'azure_cosmos_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'AccountEndpoint=https?:[^;]{0,15}\.documents\.azure\.com[^;]{0,30};AccountKey=([A-Za-z0-9+/=\\]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "AccountEndpoint=https://catalog-db.documents.azure.com:443/;AccountKey=gQaphC2JFRUGw94W0INAgyFKHS5cHWVJaXmuXlNyreeolVRnthroJgViZpZ3Hfi37qOG+aC1JuZ6TEUV47v4ku==;"
+      - "\"cosmos\":\"AccountEndpoint=https://users.documents.azure.com:443/;AccountKey=eaq99eiVs+jlGAcY57HXA4NeFcz/YYt8qYXuZyVCaHYeDmqZw97j9g05rbcKdUUXRoZwEsykt5KFecGS1D6b+p==\""
+    negative_examples:
+      - "AccountEndpoint=https://catalog-db.documents.azure.com:443/;AccountKey=gQaphC2JFR"
+      - "AccountEndpoint=https://catalog-db.example.com:443/;AccountKey=gQaphC2JFRUGw94W0INAgyFKHS5cHWVJaXmuXlNyreeolVRnthroJgViZpZ3Hfi37qOG+aC1JuZ6TEUV47v4ku=="
+  # Azure Cache for Redis: X.redis.cache.windows.net:6380,password=<key>,ssl=True
+  # Comma-delimited format — [^,] prevents crossing field boundaries
+  - id: 'AZURE_CONN_006'
+    name: 'Azure Cache for Redis Connection String'
+    key: 'azure_redis_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: '[a-zA-Z0-9\-]{1,63}\.redis\.cache\.windows\.net[^,]{0,20},password=([^,\s"''\r\n]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"redis\":\"cache-prod.redis.cache.windows.net:6380,password=ZsbgGbz7fYztquoiiKk/aCYUVDt6t1v4p2gOu7ffzlp=,ssl=True,abortConnect=False\""
+      - "sessions.redis.cache.windows.net:6380,password=GJhP0039oslHCSxNQuOD60z1hniqJ17x/aiCxr2wxnM="
+    negative_examples:
+      - "cache-prod.redis.cache.windows.net:6380,password=ZsbgGbz7fY"
+      - "cache-prod.redis.example.net:6380,password=ZsbgGbz7fYztquoiiKk/aCYUVDt6t1v4p2gOu7ffzlp="
+  # Azure Communication Services: endpoint=https://X.communication.azure.com/;accesskey=<base64>
+  - id: 'AZURE_CONN_007'
+    name: 'Azure Communication Services Conn String'
+    key: 'azure_acs_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'endpoint=https?:[^;]{0,15}\.communication\.azure\.com[^;]{0,30};accesskey=([A-Za-z0-9+/=\\]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "endpoint=https://notify-acs.communication.azure.com/;accesskey=Vvuw49vPXU30ZRbKQ3tmBTB9UZwHNQZFV7vtofbYxArdgoolQfSJJFooH8Zr28RsCASMCSUHO+SkdJM5YH98pp=="
+      - "\"acs\":\"endpoint=https://sms.communication.azure.com/;accesskey=o8Oxw+8bu56nl8g8n48wIEhzqgzH27OseT8mXaDDhtPeSnSEuPKN5KcUpSk/YWhS2uqOodj/cOksHTGlF8RpWl==\""
+    negative_examples:
+      - "endpoint=https://notify-acs.communication.azure.com/;accesskey=Vvuw49vPXU"
+      - "endpoint=https://notify-acs.example.com/;accesskey=Vvuw49vPXU30ZRbKQ3tmBTB9UZwHNQZFV7vtofbYxArdgoolQfSJJFooH8Zr28RsCASMCSUHO+SkdJM5YH98pp=="
+  # Azure Web PubSub: Endpoint=https://X.webpubsub.azure.com;AccessKey=<base64>;Version=1.0
+  - id: 'AZURE_CONN_008'
+    name: 'Azure Web PubSub Connection String'
+    key: 'azure_webpubsub_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'Endpoint=https?:[^;]{0,15}\.webpubsub\.azure\.com[^;]{0,30};AccessKey=([A-Za-z0-9+/=\\]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Endpoint=https://chat.webpubsub.azure.com;AccessKey=PKKgj5ydme3t9pZVA0lrHg7Aw3pyNrvXLPKQuRYJCm+=;Version=1.0;"
+      - "\"wps\":\"Endpoint=https://live.webpubsub.azure.com;AccessKey=1Z467z3CFLHo2xPGKYdpDXO3JfWgTtozpr+rU8ycofA=;Version=1.0;\""
+    negative_examples:
+      - "Endpoint=https://chat.webpubsub.azure.com;AccessKey=PKKgj5ydme"
+      - "Endpoint=https://chat.example.com;AccessKey=PKKgj5ydme3t9pZVA0lrHg7Aw3pyNrvXLPKQuRYJCm+="
+  # Azure SignalR: Endpoint=https://X.service.signalr.net;AccessKey=<base64>;Version=1.0
+  - id: 'AZURE_CONN_009'
+    name: 'Azure SignalR Connection String'
+    key: 'azure_signalr_conn_str'
+    kind: anchored
+    severity: HIGH
+    pattern: 'Endpoint=https?:[^;]{0,15}\.service\.signalr\.net[^;]{0,30};AccessKey=([A-Za-z0-9+/=\\]{20,200})'
+    flags: [CASE_INSENSITIVE]
+    source: secretsifter
+    license: MIT
+    provider: 'Microsoft Azure'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Endpoint=https://realtime.service.signalr.net;AccessKey=z9LgIphkKNTZ/r8AgI/x+I/xOiTj1hlQDgHLje34K2p=;Version=1.0;"
+      - "\"signalr\":\"Endpoint=https://hub.service.signalr.net;AccessKey=KjZlfFyTYvMQVEdJ7/BXFvBPTWqpkFHfPkg3kB7+dJ2=;Version=1.0;\""
+    negative_examples:
+      - "Endpoint=https://realtime.service.signalr.net;AccessKey=z9LgIphkKN"
+      - "Endpoint=https://realtime.example.net;AccessKey=z9LgIphkKNTZ/r8AgI/x+I/xOiTj1hlQDgHLje34K2p="
+  # GCP service account e-mail (client_email field in service account JSON)
+  - id: 'GCP_KEY_001'
+    name: 'GCP Service Account Email'
+    key: 'gcp_sa_client_email'
+    kind: anchored
+    severity: LOW
+    pattern: '\b[a-z0-9\-]{1,64}@[a-z0-9\-]{1,64}\.iam\.gserviceaccount\.com\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Google Cloud'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"client_email\":\"deploy-bot@acme-prod-4821.iam.gserviceaccount.com\""
+      - "serviceAccount: ci-runner@build-pipeline.iam.gserviceaccount.com"
+    negative_examples:
+      - "deploy-bot@acme-prod.gserviceaccount.com"
+      - "deploy-bot@acme-prod.iam.example.com"
+  # Razorpay live key
+  - id: 'RAZORPAY_KEY_001'
+    name: 'Razorpay Key ID (Live, public)'
+    key: 'razorpay_live_key'
+    kind: anchored
+    severity: LOW
+    pattern: '\brzp_live_[A-Za-z0-9]{14}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Razorpay'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const razorpayKeyId = \"rzp_live_F9LivFnbxQ3DcM\";"
+      - "{\"razorpayKeyId\": \"rzp_live_F9LivFnbxQ3DcM\"}"
+    negative_examples:
+      - "rzp_live_A1A1A1A1A1A1A1A1A1A1"
+  # Razorpay test key
+  - id: 'RAZORPAY_KEY_002'
+    name: 'Razorpay Key ID (Test)'
+    key: 'razorpay_test_key'
+    kind: anchored
+    severity: INFORMATION
+    pattern: '\brzp_test_[A-Za-z0-9]{14}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Razorpay'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const razorpayKeyId = \"rzp_test_cBwA1NU6897Hk8\";"
+      - "{\"razorpayKeyId\": \"rzp_test_cBwA1NU6897Hk8\"}"
+    negative_examples:
+      - "rzp_test_A1A1A1A1A1A1A1A1A1A1"
+  # Supabase Personal Access Token
+  - id: 'SUPABASE_KEY_001'
+    name: 'Supabase Personal Access Token'
+    key: 'supabase_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsbp_[a-f0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Supabase'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "SUPABASE_ACCESS_TOKEN=sbp_0f6358e7a02cbfc47433982a2b797bf50ea0a5d7"
+      - "Authorization: Bearer sbp_7cb18c42910a5c7adb46ff0956992007f83e0a17"
+    negative_examples:
+      - "sbp_0f6358e7a02cbfc47433982a2b797bf50ea0a5d\""
+      - "sbp_U145FI81KESEXX6MHMTDRI400D9V5L1ZE0KAGFN5"
+  - id: 'SUPABASE_KEY_002'
+    name: 'Supabase Secret Key'
+    key: 'supabase_secret_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsb_secret_[A-Za-z0-9_\-]{31}(?![A-Za-z0-9_\-])'
+    source: betterleaks
+    license: MIT
+    provider: 'Supabase'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "const SUPABASE_SECRET_KEY = \"sb_secret_XMOkicNnWwMcoSYYDwCMcOk5FHRfH-k\";"
+      - "{\"SUPABASE_SECRET_KEY\": \"sb_secret_XMOkicNnWwMcoSYYDwCMcOk5FHRfH-k\"}"
+    negative_examples:
+      - "sb_secret_short"
+  # Braintree OAuth access token (production + sandbox)
+  - id: 'BRAINTREE_KEY_001'
+    name: 'Braintree OAuth Access Token'
+    key: 'braintree_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\baccess_token\$(?:production|sandbox)\$[a-f0-9]{16}\$[a-f0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Braintree'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "BRAINTREE_ACCESS_TOKEN=access_token$production$ab08a1e462cad20a$610470bef2206a79eaf33470e3726ac2"
+      - "\"token\":\"access_token$sandbox$650f22eb8eaad59b$0ce825f6094f12a3fab0d06fe136b534\""
+    negative_examples:
+      - "access_token$production$ab08a1e462cad20$610470bef2206a79eaf33470e3726ac2"
+      - "access_token$staging$ab08a1e462cad20a$610470bef2206a79eaf33470e3726ac2"
+  # Braintree client/tokenization key — sandbox_<8>_<12–32> or production_<8>_<12–32>
+  # These are the client-side keys passed to braintree.client.create().
+  # Sandbox keys are LOW (test environment); production keys are MEDIUM (client-exposed but real).
+  - id: 'BRAINTREE_KEY_003'
+    name: 'Braintree Client Token (Production)'
+    key: 'braintree_client_token_prod'
+    kind: anchored
+    severity: MEDIUM
+    pattern: '\bproduction_(?=[a-z0-9]*[0-9])[a-z0-9]{6,12}_(?=[a-z0-9]*[0-9])[a-z0-9]{12,32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Braintree'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "authorization: \"production_j7rq2dnv_3kxpktammrl3mlnk\""
+      - "braintree.client.create({ authorization: \"production_etcx7gz0_usb86vxoai2b2vi6cz9d4uvd\" })"
+    negative_examples:
+      - "production_j7rq_3kxpktammrl3mlnk"
+      - "production-j7rq2dnv_3kxpktammrl3mlnk"
+      - "\"production_server_configuration\""
+  - id: 'BRAINTREE_KEY_002'
+    name: 'Braintree Client Token (Sandbox / Test)'
+    key: 'braintree_client_token_sandbox'
+    kind: anchored
+    severity: LOW
+    pattern: '\bsandbox_(?=[a-z0-9]*[0-9])[a-z0-9]{6,12}_(?=[a-z0-9]*[0-9])[a-z0-9]{12,32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Braintree'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "authorization: \"sandbox_54cmiekx_2ts1murn9kk8wb0i\""
+      - "\"tokenizationKey\":\"sandbox_i7x8xz4h_0qdp1jvhpnrjx8py2obl\""
+    negative_examples:
+      - "sandbox_54cmiekx_2ts1murn9k\""
+      - "sandbox-54cmiekx_2ts1murn9kk8wb0i"
+      - "\"sandbox_iframe_communication\""
+  # Klaviyo private API key — pk_ prefix + 34 hex chars (MEDIUM: short prefix has moderate FP risk)
+  - id: 'KLAVIYO_KEY_001'
+    name: 'Klaviyo Private API Key'
+    key: 'klaviyo_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bpk_[a-f0-9]{34}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Klaviyo'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Klaviyo-API-Key pk_bd8383c1f521c7417d3c1549f298b6f9d7"
+      - "\"privateKey\":\"pk_ac8c408cfecdb3b816fed8cb74e3f3e43c\""
+    negative_examples:
+      - "pk_bd8383c1f521c7417d3c1549f298b6f9d\""
+      - "pk_PJU9EXY7DV476XINTJ16FF6RTWVYH81F35XYZ"
+  # Stripe Webhook Signing Secret — whsec_ prefix + 40 base62 chars
+  - id: 'STRIPE_KEY_005'
+    name: 'Stripe Webhook Signing Secret'
+    key: 'stripe_webhook_secret'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bwhsec_[A-Za-z0-9+/=]{24,90}(?![A-Za-z0-9+/=])'
+    source: secretsifter
+    license: MIT
+    provider: 'Stripe'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "STRIPE_WEBHOOK_SECRET=whsec_5pXJtwOdLHCvYlmr2RjDZc399WEgfQAW8cnemMwZ"
+      - "\"endpointSecret\":\"whsec_8CyFGJMjgIR0RDAdD6z7qTNVloMK8GPhiT8DPrtP\""
+      - "STRIPE_WEBHOOK_SECRET=whsec_73cc1ff345c92c78b66c6712d0a08f77bbdb7c1d5721a296db2e4e4a95ff2af4"
+    negative_examples:
+      - "whsec_short"
+  # btoa("clientId:secret") — OAuth Basic Auth credential pair hardcoded in frontend JS.
+  # Both sides must be ≥8 chars; allows alphanumeric plus hyphen, underscore, dot, +, /
+  # (covers UUID-format client IDs, base64url secrets, etc.).  The btoa("…") wrapper
+  # plus colon separator provide strong anchoring — URL false-positives are impossible
+  # because URLs contain "://" which would fail the single-colon split.
+  # e.g. btoa("xnaxZVSMszwY4Taj5iYWOptnDsMSY6up:NQBpjpn47uKgoljE")
+  # e.g. btoa("a1b2c3d4-e5f6-7890-abcd-ef1234567890:MyS3cr3t_Key.value")
+  - id: 'BTOA_CREDS_001'
+    name: 'OAuth Credential Pair in btoa() Call'
+    key: 'btoa_oauth_creds'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bbtoa\(\s*(?:"[A-Za-z0-9\-_.+/@]{3,200}:[A-Za-z0-9\-_.+/!#$%^&*@]{8,200}"|''[A-Za-z0-9\-_.+/@]{3,200}:[A-Za-z0-9\-_.+/!#$%^&*@]{8,200}''|`[A-Za-z0-9\-_.+/@]{3,200}:[A-Za-z0-9\-_.+/!#$%^&*@]{8,200}`)\s*\)'
+    source: secretsifter
+    license: MIT
+    provider: 'Generic (Basic auth)'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "headers: { Authorization: \"Basic \" + btoa(\"MCm24JhAMddLSFKzeqVc:vqWeshL1gQwXx3ErpXi6x2L3fxODlw25\") }"
+      - "btoa(\"svc-client.app:jpDQBZnbGk48FB6EEw8g3RZG\")"
+      - "headers.Authorization = 'Basic ' + btoa('svc-user:Pr0dPassw0rd!');"
+    negative_examples:
+      - "btoa(\"ab:jpDQBZnbGk48FB6EEw8g3RZG\")"
+      - "btoa(user + \":\" + pass)"
+  # DeepSeek API key — sk- + 32 lowercase hex (distinct from OpenAI sk- + 48 alphanumeric)
+  - id: 'DEEPSEEK_KEY_001'
+    name: 'DeepSeek / OpenAI-compatible API Key'
+    key: 'deepseek_api_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk-[a-f0-9]{32}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'DeepSeek'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "DEEPSEEK_API_KEY=sk-25b2952b63a3de70c32b2ca5986c1793"
+      - "\"apiKey\":\"sk-b1a0d24a528128562be062acf58009a1\""
+    negative_examples:
+      - "sk-25b2952b63a3de70c32b2ca5986c179\""
+      - "sk-ORL4ZN0LS90TFGXAI5WTK283ZQ0ABH7L"
+  # GCP OAuth2 short-lived access token — ya29. prefix (returned after OAuth2 token exchange)
+  - id: 'GCP_KEY_003'
+    name: 'GCP OAuth2 Access Token'
+    key: 'gcp_oauth2_access_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bya29\.[A-Za-z0-9_\-]{30,}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Google Cloud'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "Authorization: Bearer ya29.a0p4fynAHWFI6CqYTo-NDJjBMQzXQ05UDQiOGaUMHVTX480_Zv86N5VfFplqrGXiKJyjC-NczE7S0UBvnsd4IFAgQMYoW7SkYZbz4MzW3KJOQlAt05dDOguTII"
+      - "\"access_token\":\"ya29.30CqGUPw4rYiRsnrYNUx6cBefDJ3fMQkvguLOEBb4HwsxvVqszmDCbsYs2OE\""
+    negative_examples:
+      - "ya29.30CqGUPw4rYiRsnrYNUx\""
+      - "ya30.30CqGUPw4rYiRsnrYNUx6cBefDJ3fMQkvguLOEBb4HwsxvVqszmDCbsYs2OE"
+  # Twitch stream key — live_{8-12 digit accountId}_{30-36 alnum}
+  - id: 'TWITCH_KEY_001'
+    name: 'Twitch Stream Key'
+    key: 'twitch_stream_key'
+    kind: anchored
+    severity: MEDIUM
+    pattern: '\blive_\d{8,12}_[A-Za-z0-9]{30,36}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Twitch'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "streamKey: \"live_188041592_IqacVgwWvmBPYdFs9cNt7GGhafupW6\""
+      - "rtmp://live.twitch.tv/app/live_8568981745_dSdvA0zLdDffHCDHO0utFqNzTsqiU1"
+    negative_examples:
+      - "live_188041592_IqacVgwWvmBPYdFs9cNt\""
+      - "live_1880_IqacVgwWvmBPYdFs9cNt7GGhafupW6"
+  # Paystack API key — sk_live_ or sk_test_ + 40 uppercase base62
+  - id: 'PAYSTACK_KEY_001'
+    name: 'Paystack Live API Key'
+    key: 'paystack_live_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bsk_live_[A-Z0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Paystack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "PAYSTACK_SECRET_KEY=sk_live_I2LRZUJZXP1FG958N26LV37FQJM5PCNQIIHHM96U"
+      - "Authorization: Bearer sk_live_MA2VEU8BJC4E9SYBMT5LWDL230AABD8TGKYOQGIP"
+    negative_examples:
+      - "sk_live_I2LRZUJZXP1FG958N26LV37FQJM5PCNQIIHHM96\""
+      - "sk_live_i2lrzujzxp1fg958n26lv37fqjm5pcnqiihhm96ux"
+  - id: 'PAYSTACK_KEY_002'
+    name: 'Paystack Test API Key'
+    key: 'paystack_test_key'
+    kind: anchored
+    severity: LOW
+    pattern: '\bsk_test_[A-Z0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Paystack'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "PAYSTACK_TEST_KEY=sk_test_WXJ97XVF386F5UC40DCZZ6YVFG5W47Y0VDPQOENZ"
+      - "\"key\":\"sk_test_W5LNFXOV6TV16D7GTEXEAGWL6X2FUKKKIEG5OCTA\""
+    negative_examples:
+      - "sk_test_WXJ97XVF386F5UC40DCZZ6YVFG5W47Y0VDPQOE\""
+      - "sk_tst_WXJ97XVF386F5UC40DCZZ6YVFG5W47Y0VDPQOENZ"
+  # 1Password Service Account Token — ops_eyJ prefix (base64url-encoded JWT header)
+  - id: 'ONEPASSWORD_KEY_001'
+    name: '1Password Service Account Token'
+    key: 'onepassword_service_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bops_eyJ[A-Za-z0-9+/_\-]{80,4000}={0,3}'
+    source: secretsifter
+    license: MIT
+    provider: '1Password'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "OP_SERVICE_ACCOUNT_TOKEN=ops_eyJI6tlProWU8ltGIbybFYtL93bd9Ql9VvPJc6Ip8xIucxa9tq5PhQ3skODIGCeBGjldPYvzI58sTgPcfLyMlzxQI1DbwYLeA3GuO_3gBfvdFsjeVqOnkQt-Cm2XmQC35JhtFFmrWtjES-WpfMeC0B1Jm7BEuSYvddin81dCeZsGHj-BFJDLIYFhepDyczMyz-dAWaQSuR1h8-cCNejBTCuvRqQ0ySCHvab6b7iNXGRKWauXOb4eFV-wNXZcy1H9mTS7EBOwEcH37CnZXcaQ3RBA3Vpn1J8kyIHsNk9IhcIK1oN"
+      - "\"token\":\"ops_eyJ2cbO1zh7BDrdokvxDKX2VBD9r98nfoUOYUBLHcVLFTxVBB2hdSIkyLQJ7XyZEbq4nzNz4RPnjne-SOJ_EvQtyJQ1dz\""
+    negative_examples:
+      - "ops_eyJ2cbO1zh7BDrdokvxDKX2VBD9r98nfoUOYUBLHcVL\""
+      - "ops_xyJ2cbO1zh7BDrdokvxDKX2VBD9r98nfoUOYUBLHcVLFTxVBB2hdSIkyLQJ7XyZEbq4nzNz4RPnjne-SOJ_EvQtyJQ1dz"
+  # Harness Personal Access Token — pat.{22upper}.{24hex}.{20upper}
+  - id: 'HARNESS_KEY_001'
+    name: 'Harness Personal Access Token'
+    key: 'harness_pat'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:pat|sat)\.[A-Za-z0-9_\-]{22}\.[0-9a-f]{24}\.[A-Za-z0-9]{20}\b'
+    license: MIT
+    source: betterleaks
+    provider: 'Harness'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "HARNESS_API_KEY=\"pat.hVO6hGSq8_w3kczlD5AY7g.9023edbd35451bd2d9b9be6a.X3NFELlmrAV7CzCs2RWe\""
+      - "{\"harness\": \"sat.u2sE7n7g_MjjU_5KuFY7qA.5c2f767e70e386a3fdbdf641.sRERRh4Jfj7ykUoxlhCB\"}"
+    negative_examples:
+      - "pat.G7W1KF0CO9DQFLPJ9BUO3.a1d0c4ccab7bd7a686993d8e.ZL2KMJHZTMKSQX6SSZ8R"
+      - "pat.G7W1KF0CO9DQFLPJ9BUO3F.a1d0c4ccab7bd7a686993d8e"
+  # Scalingo API token — tk-us- prefix + 48 base62
+  - id: 'SCALINGO_KEY_001'
+    name: 'Scalingo API Token'
+    key: 'scalingo_api_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\btk-us-[A-Za-z0-9_\-]{48}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Scalingo'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "SCALINGO_API_TOKEN=tk-us-rhsifOlYHznBi-D8TiZkKeVHqzhLeQf6YhuVEaTCI6c-mSuH"
+      - "\"token\":\"tk-us-JGdtpft4HLhG9nMiGtiOJRs2jsG-94NLF6wW7WODnrMrtxEI\""
+    negative_examples:
+      - "tk-us-rhsifOlYHznBi-D8TiZkKeVHqzhLeQf6YhuVEaTCI6c-mSu\""
+      - "tk-eu-rhsifOlYHznBi-D8TiZkKeVHqzhLeQf6YhuVEaTCI6c-mSuH"
+  # Adafruit IO key — aio_ prefix + 28 alphanumeric
+  - id: 'ADAFRUIT_KEY_001'
+    name: 'Adafruit IO Key'
+    key: 'adafruit_io_key'
+    kind: anchored
+    severity: HIGH
+    pattern: '\baio_[A-Za-z0-9]{28}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Adafruit IO'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "X-AIO-Key: aio_ouZpPVDzxnQhLLOwte7Xy2uVUGBN"
+      - "\"aioKey\":\"aio_JFT2nz6qMNwP8yJ8YcaVD31EasrP\""
+    negative_examples:
+      - "aio_ouZpPVDzxnQhLLOwte7Xy2uVUGB\""
+      - "aio-ouZpPVDzxnQhLLOwte7Xy2uVUGBN"
+  # SonarQube / SonarCloud user token (v9.x+) — squ_ or sqp_ prefix + 40 hex
+  - id: 'SONAR_KEY_001'
+    name: 'SonarQube / SonarCloud Token'
+    key: 'sonarqube_token'
+    kind: anchored
+    severity: HIGH
+    pattern: '\b(?:squ|sqp|sqa)_[a-f0-9]{40}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'SonarQube'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "SONAR_TOKEN=squ_ad5a690c4a4f1208fb7f2d72e6ba2392a71540a6"
+      - "sonar.token=sqp_16ff700f3fd5d1d9a64c1f346ec8cf9b1b3519fb"
+      - "SONAR_TOKEN=sqa_3b39f52a9d85f2462ae0387fc7afc3fa85b36c2e"
+    negative_examples:
+      - "squ_ad5a690c4a4f1208fb7f2d72e6ba2392a71540a\""
+      - "sqx_ad5a690c4a4f1208fb7f2d72e6ba2392a71540a6"
+  # bcrypt password hash — indicates hashed credentials exposed in response
+  - id: 'PWHASH_KEY_001'
+    name: 'bcrypt Password Hash (Credential Exposure)'
+    key: 'bcrypt_password_hash'
+    kind: anchored
+    severity: MEDIUM
+    pattern: '\$2[abxy]\$\d{1,2}\$[./A-Za-z0-9]{53}'
+    source: secretsifter
+    license: MIT
+    provider: 'Generic (password hash)'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"password\":\"$2b$12$fJH873uDNTp0YSrkYXTFnMF27VoW.n7blOvNPP9WoW0qtMmbF96iU\""
+      - "admin:$2y$10$mdn8kgPleMyW8SnTp7PjUR29zyImMk8awg5DM0QdXy0uelTzUASXg"
+    negative_examples:
+      - "$2b$12$fJH873uDNTp0YSrkYXTFnMF27VoW.n7blOvNPP9W\""
+      - "$2z$12$fJH873uDNTp0YSrkYXTFnMF27VoW.n7blOvNPP9WoW0qtMmbF96iU"
+  # FlexMonster pivot table license key.
+  # Format: XXXX-XXXXXX-DDDDDD(-XXXXXX){4,} where X = uppercase alphanum, D = digit.
+  # The third segment being pure digits is the distinguishing feature vs. random hex.
+  # Example: Z7ER-XJDC0M-252462-0T4P69-5R3S6O-5X6I4Q-4Y5B1Q-0M4M1O-2M102B-6U4S0E-255U1M-6R2E2S
+  - id: 'FLEXMONSTER_KEY_001'
+    name: 'Flexmonster License Key (client-side)'
+    key: 'flexmonster_license_key'
+    kind: anchored
+    severity: LOW
+    pattern: '\b[A-Z0-9]{4}-[A-Z0-9]{6}-[0-9]{6}(?:-[A-Z0-9]{6}){4,}\b'
+    source: secretsifter
+    license: MIT
+    provider: 'Flexmonster'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "licenseKey: \"Z7CL-AH9AIR-186258-GI9MGY-34DHRS-2ZWA8X-DWQ4JE\""
+      - "\"licenseKey\":\"Z7XX-7BBTSW-710068-P2T4Y5-3IQ58U-0TXUWA-TMRSAF-VT4264\""
+    negative_examples:
+      - "Z7XX-AH9AIR-186258-GI9MGY-34DHRS"
+      - "Z7XX-AH9AIR-ABCDEF-GI9MGY-34DHRS-2ZWA8X-DWQ4JE"
+  # GCP OAuth2 client secret — issued by Google Cloud Console for OAuth2 apps.
+  # GOCSPX- prefix + 28 base62url chars.  Distinct from the ya29. access token.
+  - id: 'GCP_KEY_004'
+    name: 'GCP OAuth2 Client Secret'
+    key: 'gcp_client_secret'
+    kind: anchored
+    severity: HIGH
+    pattern: '\bGOCSPX-[A-Za-z0-9_\-]{28}(?![A-Za-z0-9_\-])'
+    source: secretsifter
+    license: MIT
+    provider: 'Google Cloud'
+    cwe: 'CWE-798'
+    owasp: 'A07:2021'
+    examples:
+      - "\"client_secret\":\"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\""
+      - "GOOGLE_CLIENT_SECRET=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"
+    negative_examples:
+      - "GOCSPX-r5-SLRf2GXgPb07Z53_s5awj6VJ\""
+      - "GOCSPY-r5-SLRf2GXgPb07Z53_s5awj6VJo"
+  # OAuth2/OIDC resource ID disclosure — Azure AD B2C, Auth0, Okta, AD FS, etc.
+  # The resource field (or resourceId) carries the API app/client GUID. Public
+  # by OAuth design but useful recon info when paired with the tenant URL.
+  # X.509 certificate thumbprint — SHA-1 fingerprint (40 hex chars), public by design.
+  # Exposes which certificates are in use for signing/TLS; useful recon info.
+  # Vault secret reference ID — keys named *SecretId / *PasswordSecretId with a UUID value.
+  # These are pointers to where credentials are stored (Azure Key Vault, CyberArk, etc.),
+  # not credentials themselves. Exposes vault topology and secret naming conventions.
