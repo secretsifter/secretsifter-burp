@@ -29,3 +29,6 @@ hs_err_pid*
 # Local override files (keep public ones tracked)
 local.properties
 gradle.properties.local
+
+# snapshot-test run artifacts (not source)
+*.actual.txt

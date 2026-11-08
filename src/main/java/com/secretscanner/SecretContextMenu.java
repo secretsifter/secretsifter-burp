@@ -113,12 +113,11 @@ public class SecretContextMenu implements ContextMenuItemsProvider {
             }
         }
 
-        // 3. Fallback: if the site map returned no items (e.g. called from Repeater or
-        //    Proxy History before the target appears in the site map), scan the originally
-        //    selected items directly.
-        if (toScan.isEmpty()) {
-            toScan = new ArrayList<>(targets);
-        }
+        // 3. The items the user actually selected come first (an edited Repeater response is not
+        //    in the site map), followed by the rest of the host's site-map items.
+        List<HttpRequestResponse> ordered = new ArrayList<>(targets);
+        ordered.addAll(toScan);
+        toScan = ordered;
 
         // 4. Scan each unique URL.
         //    scanRequestResponse covers: response body (with inline <script> extraction for
@@ -132,16 +131,17 @@ public class SecretContextMenu implements ContextMenuItemsProvider {
                 String url = rr.request().url();
                 if (!seenUrls.add(url != null ? url : "")) continue;  // skip duplicate URLs
                 if (rr.response() == null) continue;
-                List<SecretFinding> findings = scanner.scanRequestResponse(rr);
+                List<SecretFinding> findings = scanner.scanRequestResponseExplicit(rr);
                 findingCount += findings.size();
                 // One AuditIssue per (URL, rule) group for a clean sitemap
                 Map<String, List<SecretFinding>> grouped = new LinkedHashMap<>();
                 for (SecretFinding f : findings)
                     grouped.computeIfAbsent(f.ruleName(), k -> new ArrayList<>()).add(f);
                 for (List<SecretFinding> group : grouped.values()) {
-                    if (!SitemapDeduplicator.shouldAdd(group)) continue;
+                    // explicit rescan: always (re-)add, even if the issue was added or deleted before
+                    if (!SitemapDeduplicator.shouldAddForRescan(group)) continue;
                     try { api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rr)); }
-                    catch (Exception e) { if (api != null) api.logging().logToError("siteMap.add failed for " + url + ": " + e.toString()); }
+                    catch (Exception e) { if (api != null) api.logging().logToError(BulkScanPanel.redactUrls("siteMap.add failed for " + url + ": " + e)); }
                 }
             } catch (Exception e) {
                 if (api != null) api.logging().logToError("SecretContextMenu.performRescan: " + e.toString());

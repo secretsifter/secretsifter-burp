@@ -41,24 +41,28 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   - HTML inline &lt;script&gt; block scanning
  *   - Scope Monitor: passively collects findings from Burp proxy traffic
  *     for any host that appears in the URL list
- *   - Export findings as CSV or HTML report
+ *   - Export findings as CSV, JSON, SARIF or HTML report (full or redacted)
  *   - Right-click a finding row → copy value or open URL in browser
  */
 public class BulkScanPanel {
 
     // ── Columns ───────────────────────────────────────────────────────────────
     private static final String[] COLS = {
-        "#", "Severity", "Confidence", "Rule ID", "Key", "Value", "URL", "Target URL", "Line", "Context", ""
+        "Issue ID", "Severity", "Confidence", "Rule ID", "Key", "Value", "URL", "Target URL", "Line", "Context", ""
     };
+    // Issue ID: permanent per secret (SS-102426-7K4M2Q), the same in every scan; see core.IssueRegistry.
     private static final int COL_SEV        = 1;
     private static final int COL_CONF       = 2;
     private static final int COL_VAL        = 5;
     private static final int COL_URL        = 6;
     private static final int COL_TARGET_URL = 7;
+    private static final int COL_CONTEXT    = 9;
     private static final int COL_DEL        = 10;
 
     // ── State ─────────────────────────────────────────────────────────────────
     private final SecretScanner  scanner;
+    /** Tier chosen in the Bulk Scan panel for the current scan (does not change the shared setting). */
+    private volatile ScanSettings.ScanTier bulkTier = ScanSettings.ScanTier.FULL;
     private final ScanSettings   settings;
     private final MontoyaApi     api;
 
@@ -74,6 +78,8 @@ public class BulkScanPanel {
      * the user clicks Clear Results.
      */
     private final AtomicInteger                scanGeneration = new AtomicInteger(0);
+    /** Generation of the scan that started the bulk task running on this thread. */
+    private static final ThreadLocal<Integer>  taskGeneration = new ThreadLocal<>();
     private final AtomicBoolean                running        = new AtomicBoolean(false);
     /** True while the scan is paused by the user (running stays true during pause). */
     private final AtomicBoolean                paused         = new AtomicBoolean(false);
@@ -91,7 +97,8 @@ public class BulkScanPanel {
      *  shared JS bundle referenced by multiple targets in a multi-target scan).
      *  Using URL strings instead of body.hashCode() avoids 32-bit int collisions
      *  that silently drop findings when ~540+ bodies are processed concurrently. */
-    private final Set<String>                  seenUrls       = ConcurrentHashMap.newKeySet();
+    private final Set<String>                  seenUrls       = ConcurrentHashMap.newKeySet();   // url + body hash: scanned
+    private final Set<String>                  fetchedUrls    = ConcurrentHashMap.newKeySet();   // url: already scanned once
     /** Finding-level dedup — prevents the same (host, normalised-value) pair from appearing
      *  more than once in the table. Cleared on each scan start. */
     private final Set<String>                  seenFindings   = ConcurrentHashMap.newKeySet();
@@ -199,6 +206,7 @@ public class BulkScanPanel {
         this.scanner  = scanner;
         this.settings = settings;
         this.api      = api;
+        // HTTP clients are built when a scan first needs them (no network activity at load)
 
         tableModel = new DefaultTableModel(COLS, 0) {
             @Override public boolean isCellEditable(int r, int c) {
@@ -234,7 +242,7 @@ public class BulkScanPanel {
         urlArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         urlArea.setLineWrap(false);
         urlArea.setToolTipText("Paste URLs or hostnames, one per line");
-        urlTopPanel.add(new JScrollPane(urlArea), BorderLayout.CENTER);
+        urlTopPanel.add(Branding.watermarkInBox(new JScrollPane(urlArea)), BorderLayout.CENTER);
 
         JPanel urlBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
         JButton importBtn    = new JButton("Import File…");
@@ -286,7 +294,7 @@ public class BulkScanPanel {
 
         JPanel statusBottomPanel = new JPanel(new BorderLayout(4, 4));
         statusBottomPanel.setBorder(new TitledBorder("Target Status"));
-        statusBottomPanel.add(new JScrollPane(targetStatusTable), BorderLayout.CENTER);
+        statusBottomPanel.add(Branding.watermarkInBox(new JScrollPane(targetStatusTable)), BorderLayout.CENTER);
 
         JSplitPane leftSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, urlTopPanel, statusBottomPanel);
         leftSplit.setDividerLocation(220);
@@ -426,6 +434,7 @@ public class BulkScanPanel {
                 "FAST: vendor tokens + URL creds only");
         optPanel.add(tierCombo);
 
+
         // ── Centre: results table ──────────────────────────────────────────
         resultsTable = new JTable(tableModel);
         for (int i = 0; i < resultsTable.getColumnModel().getColumnCount(); i++)
@@ -450,13 +459,15 @@ public class BulkScanPanel {
                 SEV_ORDER.getOrDefault(a != null ? a.toString().toUpperCase() : "", 99),
                 SEV_ORDER.getOrDefault(b != null ? b.toString().toUpperCase() : "", 99)));
         resultsTable.setRowSorter(sorter);
-        // Default: severity ascending (CRITICAL first), then arrival order within each group
+        // Default: severity ascending (CRITICAL first), then issue ID (first-seen order) within each group
+        // IDs are SS-MMDDYY-XXXXXX: order by first-seen date (year, month, day), then code
+        sorter.setComparator(0, java.util.Comparator.comparing((Object o) -> issueIdSortKey(String.valueOf(o))));
         sorter.setSortKeys(List.of(
                 new RowSorter.SortKey(COL_SEV, SortOrder.ASCENDING),
                 new RowSorter.SortKey(0, SortOrder.ASCENDING)));
 
         // Column widths
-        int[] widths = { 35, 65, 75, 130, 130, 220, 220, 160, 45, 200, 28 };
+        int[] widths = { 135, 65, 75, 95, 130, 130, 220, 220, 160, 45, 200, 28 };
         for (int i = 0; i < widths.length && i < resultsTable.getColumnCount(); i++) {
             resultsTable.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
         }
@@ -471,6 +482,19 @@ public class BulkScanPanel {
         // changes via the dropdown (so rows marked NOISE redraw in gray immediately).
         tableModel.addTableModelListener(e -> {
             if (e.getColumn() == COL_SEV || e.getColumn() == COL_CONF) {
+                // keep the finding objects in step with the edited cells (MCP findings / exports read them)
+                if (e.getType() == javax.swing.event.TableModelEvent.UPDATE) {
+                    for (int r = Math.max(0, e.getFirstRow()); r <= e.getLastRow() && r < tableModel.getRowCount(); r++) {
+                        synchronized (tableFindings) {
+                            if (r >= tableFindings.size()) break;
+                            SecretFinding f = tableFindings.get(r);
+                            String sev  = String.valueOf(tableModel.getValueAt(r, COL_SEV));
+                            String conf = String.valueOf(tableModel.getValueAt(r, COL_CONF));
+                            if (!sev.equals(f.severity()) || !conf.equals(f.confidence()))
+                                tableFindings.set(r, f.withSeverity(sev).withConfidence(conf));
+                        }
+                    }
+                }
                 SwingUtilities.invokeLater(() -> {
                     updateCountBadges();
                     resultsTable.repaint();
@@ -603,12 +627,18 @@ public class BulkScanPanel {
         JPanel centrePanel = new JPanel(new BorderLayout(4, 4));
         centrePanel.setBorder(BorderFactory.createTitledBorder(""));
         centrePanel.add(findingsHeader, BorderLayout.NORTH);
-        centrePanel.add(tableScroll, BorderLayout.CENTER);
+        centrePanel.add(Branding.watermarkInBox(tableScroll), BorderLayout.CENTER);   // findings table
 
         // ── Bottom: progress + export ──────────────────────────────────────
         JPanel bottomPanel = new JPanel(new BorderLayout(6, 4));
 
-        progressBar = new JProgressBar(0, 100);
+        // Always labelled SecretSifter; the scan status, when there is one, follows it
+        progressBar = new JProgressBar(0, 100) {
+            @Override public String getString() {
+                String status = super.getString();
+                return (status == null || status.isBlank()) ? Branding.NAME : Branding.NAME + "  ·  " + status;
+            }
+        };
         progressBar.setStringPainted(true);
         progressBar.setString("");
         progressBar.setPreferredSize(new Dimension(0, 18));
@@ -645,10 +675,18 @@ public class BulkScanPanel {
         exportDebugCsvItem.setToolTipText("Save all suppressed/dropped findings with suppression reasons");
         exportTargetStatusItem.setToolTipText(
                 "Save scan target status (scanned / failed / SSO) as a CSV — one row per target URL");
+        JMenuItem exportSarifItem = new JMenuItem("Export SARIF (redacted)");
+        exportSarifItem.setToolTipText("SARIF 2.1.0 for CI / code-scanning / DefectDojo; values redacted, issue IDs and fingerprints included");
+        exportSarifItem.addActionListener(e -> exportSarif());
+        JMenuItem exportRedactedHtmlItem = new JMenuItem("Export HTML report (redacted)");
+        exportRedactedHtmlItem.setToolTipText("HTML report that contains no raw secret values, safe to share");
+        exportRedactedHtmlItem.addActionListener(e -> exportRedactedHtml());
         exportJsonItem.addActionListener(e        -> exportJson());
         exportDebugCsvItem.addActionListener(e    -> exportDebugCsv());
         exportTargetStatusItem.addActionListener(e -> exportTargetStatusCsv());
         dataExportMenu.add(exportJsonItem);
+        dataExportMenu.add(exportSarifItem);
+        dataExportMenu.add(exportRedactedHtmlItem);
         dataExportMenu.addSeparator();
         dataExportMenu.add(exportDebugCsvItem);
         dataExportMenu.add(exportTargetStatusItem);
@@ -828,7 +866,7 @@ public class BulkScanPanel {
             int removed = urls.size() - deduped.size();
             urls = new ArrayList<>(deduped.values());
             if (removed > 0)
-                api.logging().logToOutput("[BulkScan] Input dedup: removed "
+                logOut("[BulkScan] Input dedup: removed "
                         + removed + " duplicate(s), scanning " + urls.size() + " unique URL(s).");
         }
 
@@ -868,7 +906,8 @@ public class BulkScanPanel {
 
         // Apply the bulk-scan tier selection to the shared settings object so that
         // all scan code paths (SecretScanner, processUrl, etc.) use the correct tier.
-        settings.setTier(ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem()));
+        // the Bulk Scan tier applies to this scan only; the shared (proxy/passive) tier is untouched
+        bulkTier = ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem());
 
         paused.set(false);
         running.set(true);
@@ -877,8 +916,9 @@ public class BulkScanPanel {
         totalExpected.set(urls.size());   // seed with base URL count so bar never prematurely hits 100%
         totalDone.set(0);
         scanGeneration.incrementAndGet(); // invalidate any in-flight appendFinding callbacks from prior scan
-        ScopeMonitor.clearWatched();      // stop stale scope-monitor routing from previous scan targets
+        ScopeMonitor.clearWatched();      // stop proxy handler re-adding findings from previous scan targets
         seenUrls.clear();
+        fetchedUrls.clear();
         seenFindings.clear();   // reset per-scan dedup so a re-run always shows all findings fresh
         seenPositions.clear();
         tableModel.setRowCount(0);  // clear previous results so re-run doesn't duplicate rows
@@ -922,7 +962,7 @@ public class BulkScanPanel {
             progressBar.setString("Discovering…");
             startProgressTimer();
             statusLabel.setText("Scanning " + urls.size() + " URL(s)…");
-            api.logging().logToOutput("[BulkScan] Starting scan of " + urls.size()
+            logOut("[BulkScan] Starting scan of " + urls.size()
                     + " URL(s). Tier=" + tierCombo.getSelectedItem()
                     + "  Threads=" + (int) concurrencySpinner.getValue()
                     + "  Burp=" + api.burpSuite().version()
@@ -934,7 +974,6 @@ public class BulkScanPanel {
             // Burp Browser browsing) over the unauthenticated active-fetch body when a
             // target redirects to SSO/Entra.  No sweep is started here — the user can
             // explicitly scan the site map via the "🗺 Scan Site Map" button.
-            //
             // buildSiteMapIndex() calls api.siteMap().requestResponses(), which can take several
             // seconds on a large Burp project, so the index build AND the worker dispatch run on a
             // background thread — never on the Event Dispatch Thread, which would freeze Burp's UI.
@@ -960,17 +999,22 @@ public class BulkScanPanel {
                     return th;
                 });
 
+                final int taskGen = scanGeneration.get();
                 for (String url : scanUrls) {
                     executor.submit(() -> {
-                        if (!running.get()) return;
+                        if (!running.get() || scanGeneration.get() != taskGen) return;
                         checkPause();           // wait here if the user paused; re-check below
-                        if (!running.get()) return;
+                        if (!running.get() || scanGeneration.get() != taskGen) return;
                         urlsStarted.incrementAndGet();
+                        // findings from this task belong to the scan that started it, even if a new scan
+                        // starts while it is still finishing (they are discarded, not added to the new scan)
+                        taskGeneration.set(taskGen);
                         try {
                             processUrl(url);
                         } catch (Exception e) {
                             debugLog("BulkScanPanel.processUrl(" + url + "): " + e.toString());
                         } finally {
+                            taskGeneration.remove();
                             totalDone.incrementAndGet();   // count this base URL as done in the progress bar
                             int mainDone  = urlsDone.incrementAndGet();
                             int mainTotal = lastScanTotal;
@@ -993,13 +1037,15 @@ public class BulkScanPanel {
 
     private void scanFromSiteMap() {
         // Apply the bulk-scan tier selection before scanning.
-        settings.setTier(ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem()));
+        // the Bulk Scan tier applies to this scan only; the shared (proxy/passive) tier is untouched
+        bulkTier = ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem());
 
         // Full reset — each "Scan Site Map" invocation is independent and must
         // process every matching entry from scratch.
         scanGeneration.incrementAndGet(); // invalidate any in-flight appendFinding callbacks from prior scan
-        ScopeMonitor.clearWatched();      // stop stale scope-monitor routing from previous scan targets
+        ScopeMonitor.clearWatched();      // stop proxy handler re-adding findings from previous scan targets
         seenUrls.clear();
+        fetchedUrls.clear();
         seenFindings.clear();          // prevent prior scan results from suppressing sitemap findings
         seenPositions.clear();
         scanner.clearRequestDedup();
@@ -1140,7 +1186,9 @@ public class BulkScanPanel {
                     // OAuth token endpoints may return application/x-www-form-urlencoded
                     // or text/plain — scan these response bodies with the full scanner.
                     boolean isFormEncoded = ct.contains("application/x-www-form-urlencoded")
-                                           || ct.contains("text/plain");
+                                           || ct.contains("text/plain")
+                                           // no / generic type: the scanner sniffs JSON and config text itself
+                                           || ct.isEmpty() || ct.contains("octet-stream");
 
                     // ── Request body pre-check (needed for early-exit logic below) ─
                     String reqBody = null;
@@ -1231,261 +1279,14 @@ public class BulkScanPanel {
     }
 
     /**
-     * Scans Burp site map responses whose host matches any of the watched hosts.
-     * <p>
-     * Called automatically at the start of each active Bulk Scan (in a daemon thread)
-     * so that HTML pages captured during authenticated Burp Browser sessions are
-     * included in the results — even when the active fetch below gets a 302 redirect
-     * to an SSO provider (Microsoft Entra, Okta, etc.) because it has no session cookie.
-     * <p>
-     * Uses the same body-hash dedup as {@link #scanAndAppend} so there are no
-     * duplicate findings when the same response body is also returned by active fetch.
-     */
-    private void sweepSiteMapForHosts(Set<String> watchedHosts) {
-        if (watchedHosts.isEmpty()) return;
-        try {
-            // This method runs on a daemon background thread; api.siteMap().requestResponses()
-            // is thread-safe, so the snapshot is retrieved here directly and never on the EDT
-            // (retrieving a large site map on the EDT would freeze the Burp UI).
-            final List<burp.api.montoya.http.message.HttpRequestResponse> smList;
-            try {
-                smList = api.siteMap().requestResponses();
-            } catch (Exception fetchErr) {
-                debugLog("sweepSiteMapForHosts: cannot fetch site map: " + fetchErr);
-                return;
-            }
-            for (burp.api.montoya.http.message.HttpRequestResponse rr : smList) {
-                // IMPORTANT: do NOT check running.get() here.
-                // The active fetch (network requests) for a single URL completes very quickly
-                // when the target redirects to SSO — onScanComplete sets running=false before
-                // this sweep has iterated the site map. This sweep only reads cached local data
-                // (no network I/O) so letting it always run to completion is correct and safe.
-                if (rr.request() == null || rr.response() == null) continue;
-
-                String itemUrl = rr.request().url();
-                if (itemUrl == null || itemUrl.isBlank()) continue;
-
-                // ── Match 1: direct host (exact or subdomain) ──────────────────────────
-                boolean matches = false;
-                try {
-                    String host = new java.net.URL(itemUrl).getHost().toLowerCase();
-                    for (String wh : watchedHosts) {
-                        if (host.equals(wh) || host.endsWith("." + wh)) { matches = true; break; }
-                    }
-                } catch (Exception ignored) {}
-
-                // ── Match 2: cross-origin via Referer header ────────────────────────────
-                // e.g. target abc.com triggers API call to bcn.com — Referer: https://abc.com/
-                if (!matches) {
-                    String referer = rr.request().headerValue("Referer");
-                    if (referer != null && !referer.isBlank()) {
-                        try {
-                            String refHost = new java.net.URL(referer).getHost().toLowerCase();
-                            for (String wh : watchedHosts) {
-                                if (refHost.equals(wh) || refHost.endsWith("." + wh)) { matches = true; break; }
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                }
-
-                // ── Match 3: cross-origin via Origin header ─────────────────────────────
-                // XHR/Fetch requests always include Origin; use it as fallback
-                if (!matches) {
-                    String origin = rr.request().headerValue("Origin");
-                    if (origin != null && !origin.isBlank()) {
-                        try {
-                            String originHost = new java.net.URL(origin).getHost().toLowerCase();
-                            for (String wh : watchedHosts) {
-                                if (originHost.equals(wh) || originHost.endsWith("." + wh)) { matches = true; break; }
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                }
-
-                if (!matches) continue;
-
-                // Skip CDN/analytics domains (applied after scope check to avoid false positives)
-                if (settings.isExternalCdn(itemUrl)) continue;
-
-                // Only successful responses
-                int status = rr.response().statusCode();
-                if (status < 200 || status >= 300) continue;
-
-                String ct   = rr.response().headerValue("Content-Type");
-                String ctLc = ct != null ? ct.toLowerCase() : "";
-                String urlLc = itemUrl.toLowerCase().replaceAll("[?#].*$", "");
-                boolean isJs   = urlLc.endsWith(".js")   || urlLc.endsWith(".mjs") ||
-                                 ctLc.contains("javascript") || ctLc.contains("ecmascript");
-                boolean isHtml = ctLc.contains("text/html") || ctLc.contains("application/xhtml");
-                boolean isJson = urlLc.endsWith(".json")  ||
-                                 ctLc.contains("application/json") || ctLc.contains("+json");
-                boolean isXml  = urlLc.endsWith(".xml")   ||
-                                 ctLc.contains("text/xml")  || ctLc.contains("application/xml") ||
-                                 ctLc.contains("+xml");
-                // OAuth token endpoints may return application/x-www-form-urlencoded
-                // or text/plain — scan these response bodies with the full scanner.
-                boolean isFormEncoded = ctLc.contains("application/x-www-form-urlencoded")
-                                       || ctLc.contains("text/plain");
-                // ── Determine whether there is a request body to scan ─────────────
-                String reqBody = null;
-                try { reqBody = rr.request().bodyToString(); } catch (Exception ignored) {}
-                boolean hasReqBody = reqBody != null && !reqBody.isBlank();
-
-                // Skip if no scannable content at all
-                if (!isJs && !isHtml && !isJson && !isXml && !isFormEncoded && !hasReqBody) continue;
-
-                // Scan response body (JS / HTML / JSON / XML / form-encoded)
-                if (isJs || isHtml || isJson || isXml || isFormEncoded) {
-                    String body = rr.response().bodyToString();
-                    if (body != null && !body.isBlank()) {
-                        scanAndAppend(body, ct, itemUrl, rr);
-                    }
-                }
-
-                // Scan request body — POST/PUT/PATCH bodies may carry hardcoded secrets
-                // (e.g. API keys embedded in frontend code and sent in every POST call)
-                if (hasReqBody) {
-                    String reqCt = rr.request().headerValue("Content-Type");
-                    scanAndAppend(reqBody, reqCt != null ? reqCt : "text/plain",
-                                  itemUrl + " [REQ-BODY]", rr);
-                }
-
-                // Scan request headers — custom headers like x-api-key, Authorization,
-                // x-auth-token may carry hardcoded API keys injected by frontend JS.
-                // Limit to API/page traffic to avoid noise from static asset requests.
-                if (isJs || isHtml || isJson || isXml || isFormEncoded) {
-                    try {
-                        StringBuilder hdrs = new StringBuilder();
-                        for (var h : rr.request().headers()) {
-                            hdrs.append(h.name()).append(": ").append(h.value()).append("\n");
-                        }
-                        if (hdrs.length() > 0) {
-                            scanAndAppend(hdrs.toString(), "text/plain",
-                                          itemUrl + " [REQ-HEADERS]", rr);
-                        }
-                    } catch (Exception ignored) {}
-                }
-            }
-        } catch (Exception e) {
-            debugLog("sweepSiteMapForHosts: " + e.toString());
-        }
-    }
-
-    /**
-     * Sweeps Burp's proxy history for entries matching the watched hosts and scans
-     * any JSON, JS, or form-encoded responses not already covered by the site map sweep.
-     * <p>
-     * This is the primary path for capturing authenticated API endpoint responses
-     * (e.g. OAuth2 token endpoints returning JWT access_tokens) that Burp records in
-     * proxy history during manual Burp Browser browsing but does NOT promote to the
-     * site map unless the URL is inside Burp's configured target scope.
-     * <p>
-     * Called from the same background thread as {@link #sweepSiteMapForHosts} so
-     * there is no additional thread overhead. The URL-based dedup in
-     * {@link #scanAndAppend} ensures that responses already scanned by the site map
-     * sweep are not scanned again.
-     */
-    private void sweepProxyHistoryForHosts(Set<String> watchedHosts) {
-        if (watchedHosts.isEmpty()) return;
-        try {
-            // Runs on a daemon background thread; api.proxy().history() is thread-safe and not
-            // Swing-backed, so it is retrieved here directly without ever touching the EDT.
-            final List<burp.api.montoya.proxy.ProxyHttpRequestResponse> phList;
-            try {
-                phList = api.proxy().history();
-            } catch (Exception e) {
-                debugLog("sweepProxyHistoryForHosts: cannot fetch history: " + e);
-                return;
-            }
-            int swept = 0;
-            for (burp.api.montoya.proxy.ProxyHttpRequestResponse prr : phList) {
-                if (prr.request() == null || prr.response() == null) continue;
-                int s = prr.response().statusCode();
-                if (s < 200 || s >= 300) continue;
-                String phUrl = prr.request().url();
-                if (phUrl == null || settings.isExternalCdn(phUrl)) continue;
-
-                boolean matches = false;
-                try {
-                    String host = new java.net.URL(phUrl).getHost().toLowerCase();
-                    for (String wh : watchedHosts) {
-                        if (host.equals(wh) || host.endsWith("." + wh)) { matches = true; break; }
-                    }
-                } catch (Exception ignored) {}
-                if (!matches && ScopeMonitor.isCrossOriginFollow()) {
-                    String referer = prr.request().headerValue("Referer");
-                    if (referer != null && !referer.isBlank()) {
-                        try {
-                            String refHost = new java.net.URL(referer).getHost().toLowerCase();
-                            for (String wh : watchedHosts) {
-                                if (refHost.equals(wh) || refHost.endsWith("." + wh)) { matches = true; break; }
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                    if (!matches) {
-                        String origin = prr.request().headerValue("Origin");
-                        if (origin != null && !origin.isBlank()) {
-                            try {
-                                String originHost = new java.net.URL(origin).getHost().toLowerCase();
-                                for (String wh : watchedHosts) {
-                                    if (originHost.equals(wh) || originHost.endsWith("." + wh)) { matches = true; break; }
-                                }
-                            } catch (Exception ignored) {}
-                        }
-                    }
-                }
-                if (!matches) continue;
-
-                String phCt   = prr.response().headerValue("Content-Type");
-                if (phCt == null) phCt = "";
-                String phCtLc = phCt.toLowerCase();
-                String phUrlLc = phUrl.toLowerCase().replaceAll("[?#].*$", "");
-                boolean isJs   = phCtLc.contains("javascript") || phCtLc.contains("ecmascript")
-                                 || phUrlLc.endsWith(".js")    || phUrlLc.endsWith(".mjs");
-                boolean isJson = phCtLc.contains("application/json") || phCtLc.contains("+json")
-                                 || phUrlLc.endsWith(".json");
-                boolean isHtml = phCtLc.contains("text/html") || phCtLc.contains("application/xhtml");
-                boolean isFormEncoded = phCtLc.contains("application/x-www-form-urlencoded")
-                                       || phCtLc.contains("text/plain");
-                if (!isJs && !isJson && !isHtml && !isFormEncoded) continue;
-
-                // Scan response body — scanAndAppend's seenUrls guard prevents rescanning
-                // URLs already covered by sweepSiteMapForHosts.
-                String phBody = prr.response().bodyToString();
-                if (phBody != null && !phBody.isBlank()) {
-                    HttpRequestResponse rr = HttpRequestResponse.httpRequestResponse(
-                            prr.request(), prr.response());
-                    scanAndAppend(phBody, phCt, phUrl, rr);
-                    swept++;
-                }
-
-                // Scan request headers for API keys
-                try {
-                    StringBuilder hdrs = new StringBuilder();
-                    for (var h : prr.request().headers()) {
-                        hdrs.append(h.name()).append(": ").append(h.value()).append("\n");
-                    }
-                    if (hdrs.length() > 0)
-                        scanAndAppend(hdrs.toString(), "text/plain", phUrl + " [REQ-HEADERS]", null);
-                } catch (Exception ignored) {}
-            }
-            if (swept > 0)
-                debugLog("[ProxyHistSweep] Scanned " + swept
-                        + " proxy history entry(ies) for watched hosts.");
-        } catch (Exception e) {
-            debugLog("sweepProxyHistoryForHosts: " + e.toString());
-        }
-    }
-
-    /**
-     * Builds a URL → HttpRequestResponse index from Burp's site map, restricted to successful
-     * (2xx) responses whose host matches one of the {@code watchedHosts} being scanned.
+     * Builds a URL → HttpRequestResponse index from Burp's site map, restricted to
+     * 200-OK HTML responses for the given watched hosts.
      * <p>
      * Called once at the start of each static bulk scan so {@link #processUrl} can
      * look up each target URL in O(1) instead of iterating the full site map per URL.
-     * Restricting the index to the watched hosts keeps a large Burp project's unrelated
-     * site-map entries (and their full request/response byte arrays) out of memory for the
-     * duration of the scan; assets on other hosts fall back to the target-origin entry.
+     * Only HTML responses are indexed because the goal is to replace the unauthenticated
+     * active-fetch HTML body with the authenticated site map body for HTML scanning and
+     * {@code <script src>} extraction.
      */
     private Map<String, HttpRequestResponse> buildSiteMapIndex(Set<String> watchedHosts) {
         Map<String, HttpRequestResponse> index = new HashMap<>();
@@ -1497,7 +1298,9 @@ public class BulkScanPanel {
                 if (status < 200 || status >= 300) continue;
                 String url = rr.request().url();
                 if (url == null) continue;
-                // Only pin entries for the hosts actually being scanned.
+                // Only pin entries for the hosts actually being scanned, so a large Burp project's
+                // unrelated site-map entries (and their full request/response bytes) are not held
+                // in memory for the scan's duration.
                 try {
                     String host = new java.net.URL(url).getHost().toLowerCase();
                     boolean watched = false;
@@ -1591,7 +1394,7 @@ public class BulkScanPanel {
     private void showColumnPicker(JComponent anchor) {
         JPopupMenu menu = new JPopupMenu();
         for (String name : COLS) {
-            if ("#".equals(name) || "".equals(name)) continue;
+            if ("Issue ID".equals(name) || "".equals(name)) continue;
             JCheckBoxMenuItem item = new JCheckBoxMenuItem(name, !hiddenColumnNames.contains(name));
             item.addActionListener(ae -> setColumnVisible(name, item.isSelected()));
             menu.add(item);
@@ -1770,7 +1573,7 @@ public class BulkScanPanel {
             statusLabel.setText(String.format("Done.  %d URL(s) scanned  ·  %d finding(s)%s",
                     lastScanTotal, tableFindings.size(), severitySummary()));
             statusLabel.setForeground(new Color(0, 130, 0));
-            api.logging().logToOutput("[BulkScan] Site map sweep complete. Total findings: "
+            logOut("[BulkScan] Site map sweep complete. Total findings: "
                     + tableFindings.size());
         }
         // else: active scan still running; onScanComplete() will update the final status.
@@ -1798,7 +1601,7 @@ public class BulkScanPanel {
         // don't have TLS.  Only applied when the caller didn't explicitly specify https://.
         if (page == null && normalised.startsWith("https://")) {
             String httpUrl = "http://" + normalised.substring(8);
-            api.logging().logToOutput("[BulkScan] HTTPS failed — retrying HTTP: " + httpUrl);
+            logOut("[BulkScan] HTTPS failed — retrying HTTP: " + httpUrl);
             page = fetchUrl(httpUrl);
             if (page != null) normalised = httpUrl;
         }
@@ -1808,7 +1611,7 @@ public class BulkScanPanel {
             // Complete connection failure — DNS, timeout, SSL exception
             statusFailed.incrementAndGet();
             recordTargetStatus(targetUrl, "×", "Unreachable");
-            api.logging().logToOutput("[BulkScan] Unreachable: " + targetUrl);
+            logOut("[BulkScan] Unreachable: " + targetUrl);
             return;
         }
         if (page.body() == null) {
@@ -1821,7 +1624,7 @@ public class BulkScanPanel {
                 statusFailed.incrementAndGet();
                 recordTargetStatus(targetUrl, "×", "HTTP " + sc);
             }
-            api.logging().logToOutput("[BulkScan] HTTP " + sc + " — skipped: " + targetUrl);
+            logOut("[BulkScan] HTTP " + sc + " — skipped: " + targetUrl);
             return;
         }
         debugLog("[BulkScan] Fetched: ct=" + page.contentType()
@@ -1861,7 +1664,7 @@ public class BulkScanPanel {
             // rather than wondering why a "+" target returned 0 findings.
             statusAuth.incrementAndGet();
             recordTargetStatus(targetUrl, "~", "SSO→" + effectiveHost);
-            api.logging().logToOutput("[BulkScan] SSO/auth redirect: " + normalised
+            logOut("[BulkScan] SSO/auth redirect: " + normalised
                     + " → " + effectiveHost + " — browse in Burp Browser first to populate site map");
             debugLog("[BulkScan] Cross-host redirect detail: final=" + effectiveUrl
                     + "  script-host anchored to: " + originalHost);
@@ -1870,7 +1673,7 @@ public class BulkScanPanel {
             // Show "?" so the user knows the real application is not available.
             statusFailed.incrementAndGet();
             recordTargetStatus(targetUrl, "?", "Soft-404?");
-            api.logging().logToOutput("[BulkScan] Soft-404 detected (200 but empty/error page): " + targetUrl);
+            logOut("[BulkScan] Soft-404 detected (200 but empty/error page): " + targetUrl);
         } else {
             statusScanned.incrementAndGet();
             recordTargetStatus(targetUrl, "+", "HTTP " + page.statusCode());
@@ -1893,6 +1696,7 @@ public class BulkScanPanel {
         // requested URL so relative script paths resolve against the real application domain.
         String              baseUrl  = crossHostRedirect ? normalised : effectiveUrl;
 
+        boolean usedSiteMap = false;
         Map<String, HttpRequestResponse> idx = siteMapIndex;
         if (!idx.isEmpty()) {
             String normOrig  = normalised.split("[?#]")[0].replaceAll("/$", "");
@@ -1907,16 +1711,27 @@ public class BulkScanPanel {
                     htmlCt   = smCt;
                     htmlRr   = smEntry;
                     baseUrl  = smEntry.request().url();   // use site map URL as base for resolving relative paths
+                    usedSiteMap = true;
                 }
             }
         }
 
-        scanAndAppend(htmlBody, htmlCt, baseUrl, htmlRr);
+        if (crossHostRedirect && !usedSiteMap) {
+            // The fetched body is the identity provider's login page, not the application: file
+            // anything in it under the IdP's own URL and do not follow its scripts as if they
+            // belonged to the target.
+            scanAndAppend(htmlBody, htmlCt, effectiveUrl, htmlRr);
+            htmlBody = "";
+        } else {
+            scanAndAppend(htmlBody, htmlCt, baseUrl, htmlRr);
+        }
 
         // 3. Headless browse — launch Chrome through Burp proxy so JS executes and all
-        //    dynamic XHR/fetch API calls fire.  The post-headless site-map and proxy-history
-        //    sweeps below pick up the responses (and, in Burp Pro, the passive scan check also
-        //    scans the proxied traffic); findings reach the table via ScopeMonitor / the sweeps.
+        //    dynamic XHR/fetch API calls fire.  Burp's passive scan check (Pro) captures the traffic
+        //    passively; findings appear in the table automatically via ScopeMonitor.
+        // 4. Headless browse — launch Chrome through Burp proxy so JS executes and all
+        //    dynamic XHR/fetch API calls fire.  Burp's passive scan check (Pro) captures the traffic
+        //    passively; findings appear in the table automatically via ScopeMonitor.
         // Collect scripts found in site map HTML pages AFTER headless populates it,
         // so multi-hop JS-redirect chains (e.g. IP → nawstart.html → 49 JS files) are captured.
         Set<String> postHeadlessScripts = new LinkedHashSet<>();
@@ -1991,12 +1806,12 @@ public class BulkScanPanel {
                     // thread (multiple threads share proxyHistSnap windows that overlap when all
                     // headless visits start at roughly the same time).
                     if (settings.isExternalCdn(phUrl)) continue;
-                    if (!seenUrls.add(phUrl)) continue;
+                    if (!fetchedUrls.add(phUrl)) continue;
                     String phBody = prr.response().bodyToString();
                     if (phBody != null && !phBody.isBlank()) {
                         String phLabelledUrl = sourceLabel(phUrl, phCt);
                         List<SecretScanner.DebugEntry> phDbg = new ArrayList<>();
-                        List<SecretFinding> phFindings = scanner.scanTextDebug(phBody, phCt, phLabelledUrl, phDbg);
+                        List<SecretFinding> phFindings = scanner.scanTextDebug(phBody, phCt, phLabelledUrl, phDbg, bulkTier);
                         debugEntries.addAll(phDbg);
                         debugLog("[HeadlessProxy] " + phFindings.size()
                                 + " finding(s) in: " + phLabelledUrl
@@ -2087,7 +1902,7 @@ public class BulkScanPanel {
                 if (baseHost != null) {
                     final String fh = baseHost;
                     scriptUrls.removeIf(u -> {
-                        try { return !new java.net.URL(u).getHost().toLowerCase().equals(fh); }
+                        try { return !sameSite(fh, new java.net.URL(u).getHost().toLowerCase()); }
                         catch (Exception ignored) { return true; }
                     });
                 }
@@ -2098,7 +1913,7 @@ public class BulkScanPanel {
                 if (baseHost != null) {
                     final String fh2 = baseHost;
                     frameUrls.removeIf(u -> {
-                        try { return !new java.net.URL(u).getHost().toLowerCase().equals(fh2); }
+                        try { return !sameSite(fh2, new java.net.URL(u).getHost().toLowerCase()); }
                         catch (Exception ignored) { return true; }
                     });
                 }
@@ -2147,7 +1962,7 @@ public class BulkScanPanel {
                 if (baseHost != null) {
                     final String fhR = baseHost;
                     redirectUrls.removeIf(u -> {
-                        try { return !new java.net.URL(u).getHost().toLowerCase().equals(fhR); }
+                        try { return !sameSite(fhR, new java.net.URL(u).getHost().toLowerCase()); }
                         catch (Exception ignored) { return true; }
                     });
                 }
@@ -2158,7 +1973,7 @@ public class BulkScanPanel {
                 for (String redirectUrl : redirectUrls) {
                     if (!running.get()) break;
                     if (!fetched.add(redirectUrl)) continue;
-                    api.logging().logToOutput("[Redirect] Following: " + redirectUrl);
+                    logOut("[Redirect] Following: " + redirectUrl);
                     FetchResult rr = fetchUrl(redirectUrl);
                     if (rr == null || rr.body() == null) continue;
                     scanAndAppend(rr.body(), "text/html", redirectUrl, rr.requestResponse());
@@ -2220,7 +2035,7 @@ public class BulkScanPanel {
                 totalExpected.addAndGet(scriptUrls.size());
                 // Pre-add the 4 asset-manifest probes so the bar doesn't hit 100%
                 // after the JS loop before manifests are even started.
-                if (followChunksBox.isSelected()) totalExpected.addAndGet(4);
+                if (followChunksBox.isSelected()) totalExpected.addAndGet(MANIFEST_PATHS.length + 1);
                 updateProgress();
                 debugLog("[JS] Discovered " + scriptUrls.size()
                         + " script URL(s) in: " + baseUrl
@@ -2241,7 +2056,7 @@ public class BulkScanPanel {
                     // Skip URLs already scanned by inline CDP, HeadlessSiteMap, sweepSiteMapForHosts,
                     // or any prior fetch path — scanAndAppend would reject them anyway, but calling
                     // fetchUrl first wastes a network round-trip for every such file.
-                    if (seenUrls.contains(jsUrl)) { totalDone.incrementAndGet(); updateProgress(); continue; }
+                    if (fetchedUrls.contains(jsUrl)) { totalDone.incrementAndGet(); updateProgress(); continue; }
                     debugLog("[JS] Fetching [" + totalDone.get() + "/" + totalExpected.get() + "]: " + jsUrl);
                     SwingUtilities.invokeLater(() -> currentFileLabel.setText("→ " + jsUrl));
                     FetchResult js = fetchUrl(jsUrl);
@@ -2262,7 +2077,7 @@ public class BulkScanPanel {
                         for (String chunkUrl : chunkUrls) {
                             if (!running.get()) return;
                             if (!fetched.add(chunkUrl)) { totalDone.incrementAndGet(); updateProgress(); continue; }
-                            if (seenUrls.contains(chunkUrl)) { totalDone.incrementAndGet(); updateProgress(); continue; }
+                            if (fetchedUrls.contains(chunkUrl)) { totalDone.incrementAndGet(); updateProgress(); continue; }
                             debugLog("[JS] Fetching chunk [" + totalDone.get() + "/" + totalExpected.get() + "]: " + chunkUrl);
                             SwingUtilities.invokeLater(() -> currentFileLabel.setText("→ " + chunkUrl));
                             FetchResult chunk = fetchUrl(chunkUrl);
@@ -2278,7 +2093,7 @@ public class BulkScanPanel {
                 // 5. Asset manifest following: fetch /asset-manifest.json and similar
                 //    to discover additional JS chunks not linked in HTML
                 if (followChunksBox.isSelected()) {
-                    followAssetManifests(baseUrl, fetched);
+                    followAssetManifests(baseUrl, fetched, nextBuildId(htmlBody));
                 }
             }
         }
@@ -2288,7 +2103,21 @@ public class BulkScanPanel {
      * Tries to fetch well-known webpack/Vite/CRA asset manifest files and scans
      * any JS chunk URLs discovered in them. Safe — 404s are silently ignored.
      */
-    private void followAssetManifests(String baseUrl, Set<String> fetched) {
+    private static final String[] MANIFEST_PATHS = {
+        "/asset-manifest.json", "/static/js/manifest.json", "/chunk-manifest.json", "/webpack-manifest.json",
+        "/.vite/manifest.json", "/manifest.vite.json", "/_nuxt/builds/latest.json"
+    };
+    private static final java.util.regex.Pattern NEXT_BUILD_ID =
+            java.util.regex.Pattern.compile("\"buildId\"\\s*:\\s*\"([A-Za-z0-9_\\-]{4,64})\"");
+
+    /** Next.js buildId from __NEXT_DATA__, or null. */
+    private static String nextBuildId(String html) {
+        if (html == null) return null;
+        java.util.regex.Matcher m = NEXT_BUILD_ID.matcher(html);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private void followAssetManifests(String baseUrl, Set<String> fetched, String nextBuildId) {
         String origin;
         try {
             java.net.URL u = new java.net.URL(baseUrl);
@@ -2297,12 +2126,11 @@ public class BulkScanPanel {
                              ? ":" + u.getPort() : "");
         } catch (Exception e) { return; }
 
-        String[] manifestPaths = {
-            "/asset-manifest.json", "/static/js/manifest.json",
-            "/chunk-manifest.json", "/webpack-manifest.json"
-        };
+        List<String> manifestPaths = new ArrayList<>(List.of(MANIFEST_PATHS));
+        // Next.js lists every route's chunks in /_next/static/<buildId>/_buildManifest.js
+        manifestPaths.add(nextBuildId != null ? "/_next/static/" + nextBuildId + "/_buildManifest.js" : "/_next/static/chunks/webpack.js");
 
-        // totalExpected already pre-incremented by 4 in processUrl() before the JS loop.
+        // totalExpected already pre-incremented in processUrl() before the JS loop.
         for (String path : manifestPaths) {
             if (!running.get()) return;
             String manifestUrl = origin + path;
@@ -2316,9 +2144,14 @@ public class BulkScanPanel {
 
             // Scan the manifest body itself — it may contain inline secrets
             // (e.g. AWS keys, CDN tokens) alongside the chunk file map.
-            scanAndAppend(mf.body(), "application/json", manifestUrl, mf.requestResponse());
+            scanAndAppend(mf.body(), path.endsWith(".js") ? "application/javascript" : "application/json",
+                    manifestUrl, mf.requestResponse());
 
-            List<String> chunkUrls = SecretScanner.extractAssetManifestUrls(mf.body(), baseUrl);
+            // manifest paths are relative to the site root (Vite writes "assets/index-abc.js");
+            // the Next build manifest lists "static/chunks/..." relative to /_next/
+            String manifestBase = path.startsWith("/_next/") ? origin + "/_next/" : origin + "/";
+            List<String> chunkUrls = new ArrayList<>(SecretScanner.extractAssetManifestUrls(mf.body(), manifestBase));
+            if (path.endsWith(".js")) chunkUrls.addAll(SecretScanner.extractWebpackChunkUrls(mf.body(), manifestBase));
             totalExpected.addAndGet(chunkUrls.size());
             updateProgress();
             debugLog("[JS] Manifest at " + manifestUrl
@@ -2345,16 +2178,16 @@ public class BulkScanPanel {
      * Launches Chrome/Chromium in headless mode with Burp as the proxy for the
      * given URL, then waits up to 45 seconds for the page to load and JS to run.
      *
-     * All traffic (XHR, Fetch, WebSockets HTTP-upgrade) flows through Burp proxy; the
-     * post-headless site-map and proxy-history sweeps (and, in Burp Pro, the passive scan
-     * check) pick it up and findings reach the Bulk Scan panel via ScopeMonitor.
+     * All traffic (XHR, Fetch, WebSockets HTTP-upgrade) flows through Burp proxy →
+     * Burp's passive scan check picks it up → ScopeMonitor dispatches findings to the
+     * Bulk Scan panel automatically.
      *
      * Returns null — URL discovery is done via post-headless site map sweep.
      */
     private String headlessVisit(String url, int proxyPort) {
         String chromePath = findChrome();
         if (chromePath == null) {
-            api.logging().logToOutput(
+            logOut(
                     "[Headless] Chrome/Chromium not found — skipping headless browse for: " + url +
                     "\n  Install Google Chrome or Chromium and ensure it is on PATH.");
             return null;
@@ -2366,7 +2199,7 @@ public class BulkScanPanel {
             testSock.connect(new java.net.InetSocketAddress("127.0.0.1", proxyPort), 1500);
             debugLog("[Headless] Proxy reachable at 127.0.0.1:" + proxyPort);
         } catch (Exception proxyEx) {
-            api.logging().logToOutput(
+            logOut(
                     "[Headless] WARNING: Cannot reach Burp proxy at 127.0.0.1:" + proxyPort +
                     " — Chrome traffic will not appear in Burp proxy history." +
                     " Check that the proxy port spinner matches Burp's listener port." +
@@ -2384,14 +2217,15 @@ public class BulkScanPanel {
             // Delete any leftover dir from a prior scan so Chrome starts with a clean cache —
             // a stale disk cache causes Chrome to make 0 network requests (serving everything
             // from cache), so proxy history gets no new entries and secrets are missed.
-            File tmpDir = new File(System.getProperty("java.io.tmpdir"),
-                    "secretsifter-chrome-" + Thread.currentThread().getId());
-            try { deleteDirectory(tmpDir); } catch (Exception ignored) {}
+            // Fresh, unpredictable profile directory per visit (no stale cache, no shared-/tmp symlink games)
+            File tmpDir = java.nio.file.Files.createTempDirectory("secretsifter-chrome-").toFile();
             ProcessBuilder pb = new ProcessBuilder(
                     chromePath,
                     "--headless=new",
                     "--disable-gpu",
-                    "--no-sandbox",
+                    // the sandbox only has to be off when Chrome runs as root on Linux
+                    (System.getProperty("os.name", "").toLowerCase().contains("linux")
+                            && "root".equals(System.getProperty("user.name"))) ? "--no-sandbox" : "--enable-sandbox",
                     "--remote-debugging-port=0",
                     // Route all Chrome traffic through Burp proxy so Burp captures
                     // every response body (including cross-origin POST token endpoints like
@@ -2412,7 +2246,10 @@ public class BulkScanPanel {
                         + "*.fullstory.com;*.segment.com;*.segment.io;*.klaviyo.com;"
                         + "*.bing.com;*.online-metrix.net;*.visualstudio.com;"
                         + "*.jsdelivr.net;*.unpkg.com;*.cookielaw.org",
-                    "--ignore-certificate-errors",           // trust Burp's self-signed cert
+                    // Trusts Burp's re-signed certificates. It also applies to the bypass-list hosts,
+                    // which go direct; acceptable because the profile is a throwaway with no
+                    // cookies or credentials, and only the target's traffic is scanned.
+                    "--ignore-certificate-errors",
                     "--allow-insecure-localhost",
                     "--disable-extensions",
                     "--no-first-run",
@@ -2449,10 +2286,11 @@ public class BulkScanPanel {
 
             // Wait up to 10 s for Chrome to expose its DevTools port, then navigate via CDP.
             String devtoolsWsUrl = devtoolsSignal.poll(10, TimeUnit.SECONDS);
+            String renderedDom = null;
             if (devtoolsWsUrl != null && !devtoolsWsUrl.isEmpty()) {
-                cdpNavigateWithProxy(devtoolsWsUrl, url, proxyPort);
+                renderedDom = cdpNavigateWithProxy(devtoolsWsUrl, url, proxyPort);
             } else {
-                api.logging().logToOutput(
+                logOut(
                         "[Headless] CDP: DevTools URL not available within 10 s — " +
                         "Chrome may not have started correctly for: " + url);
             }
@@ -2467,9 +2305,12 @@ public class BulkScanPanel {
                 debugLog("[Headless] Chrome log for " + url + ":\n" + outSnippet);
             }
             debugLog("[Headless] Visited (ok): " + url);
-            return null;
+            return renderedDom;
             } finally {
-                if (p.isAlive()) p.destroyForcibly();  // safety net if exception skipped waitFor
+                // renderer / GPU children outlive the parent unless killed explicitly
+                p.descendants().forEach(ProcessHandle::destroyForcibly);
+                if (p.isAlive()) p.destroyForcibly();
+                try { deleteDirectory(tmpDir); } catch (Exception ignored) {}   // profile deleted after every visit
             }
         } catch (Exception e) {
             debugLog("[Headless] Failed for " + url + ": " + e.toString());
@@ -2491,20 +2332,18 @@ public class BulkScanPanel {
      *   2. Connect to the tab's CDP WebSocket and enable Network.enable
      *   3. Navigate to pageUrl via Page.navigate (all network events are captured)
      *   4. Collect every URL from Network.requestWillBeSent for 25 s
-     *   5. No separate replay is needed: Chrome runs with --proxy-server pointed at Burp, so all
-     *      of its traffic already flows through Burp and is picked up by the post-headless sweeps.
-     *
-     * This uses a plaintext CDP WebSocket to local Chrome (ws://127.0.0.1), the recognised Burp
-     * API limitation for Chrome DevTools Protocol; it performs no TLS and no remote HTTP.
+     *   5. Replay each URL through a Burp-proxied Java HttpClient so the traffic
+     *      appears in Burp's proxy history and sitemap
      */
-    private void cdpNavigateWithProxy(String browserWsUrl, String pageUrl, int proxyPort) {
+    /** Navigates via CDP, captures response bodies, and returns the rendered DOM (or null). */
+    private String cdpNavigateWithProxy(String browserWsUrl, String pageUrl, int proxyPort) {
         try {
             // Extract CDP HTTP port from "ws://127.0.0.1:PORT/devtools/browser/UUID"
             java.util.regex.Matcher pm =
                     java.util.regex.Pattern.compile("ws://127\\.0\\.0\\.1:(\\d+)/").matcher(browserWsUrl);
             if (!pm.find()) {
-                api.logging().logToOutput("[Headless] CDP: cannot parse port from " + browserWsUrl);
-                return;
+                logOut("[Headless] CDP: cannot parse port from " + browserWsUrl);
+                return null;
             }
             int cdpPort = Integer.parseInt(pm.group(1));
 
@@ -2534,8 +2373,8 @@ public class BulkScanPanel {
                 } catch (Exception ignored) {}
             }
             if (targetId == null) {
-                api.logging().logToOutput("[Headless] CDP: Target.createTarget failed: " + createResp);
-                return;  // browserWs closed in finally
+                logOut("[Headless] CDP: Target.createTarget failed: " + createResp);
+                return null;  // browserWs closed in finally
             }
 
             // ── Step 2: Get the tab's WebSocket URL from /json/list
@@ -2556,8 +2395,8 @@ public class BulkScanPanel {
                 }
             } catch (Exception ignored) {}
             if (tabWsUrl == null) {
-                api.logging().logToOutput("[Headless] CDP: no WS URL for targetId=" + targetId);
-                return;  // browserWs closed in finally
+                logOut("[Headless] CDP: no WS URL for targetId=" + targetId);
+                return null;  // browserWs closed in finally
             }
 
             // ── Step 3: Connect to the tab, enable Network monitoring, then navigate
@@ -2649,7 +2488,7 @@ public class BulkScanPanel {
                             // This can happen for XHR/fetch responses under memory pressure.
                             // Step 4.5b will attempt another getResponseBody call as fallback.
                             JsonObject err = gOptObject(j, "error");
-                            api.logging().logToOutput("[Headless] CDP inline getResponseBody failed for "
+                            logOut("[Headless] CDP inline getResponseBody failed for "
                                     + nvl(cdpReqUrls.get(pendingReqId), pendingReqId) + ": "
                                     + (err != null ? gOptString(err, "message", "no message") : "no result"));
                         }
@@ -2689,7 +2528,7 @@ public class BulkScanPanel {
                             }
                         }
                         if (debugModeBox.isSelected())
-                            api.logging().logToOutput("[Headless] CDP observed: " + u);
+                            logOut("[Headless] CDP observed: " + u);
 
                     } else if ("Network.responseReceived".equals(evtMethod)) {
                         String reqId = gOptString(params, "requestId");
@@ -2731,12 +2570,11 @@ public class BulkScanPanel {
                         if (!cdpReqUrls.containsKey(reqId) || inlineBodies.containsKey(reqId)) continue;
                         String reqUrl = cdpReqUrls.get(reqId);
                         String mime   = cdpRespTypes.get(reqId);
-                        if (reqUrl == null || mime == null || seenUrls.contains(reqUrl)) continue;
+                        if (reqUrl == null || mime == null || fetchedUrls.contains(reqUrl)) continue;
                         String mimeLc = mime.toLowerCase();
                         String uLc    = reqUrl.toLowerCase().replaceAll("[?#].*$", "");
-                        boolean wantBody = mimeLc.contains("application/json") || mimeLc.contains("+json")
-                                || uLc.endsWith(".json") || mimeLc.contains("javascript")
-                                || mimeLc.contains("ecmascript") || uLc.endsWith(".js") || uLc.endsWith(".mjs");
+                        // every textual body (JSON, JS, HTML fragments, text, form-encoded token responses)
+                        boolean wantBody = !ScanSettings.isBinaryMedia(mime) && !mimeLc.startsWith("text/css");
                         if (!wantBody) continue;
                         int bid = inlineBodyIdCounter[0]++;
                         tabWs.sendText("{\"id\":" + bid + ",\"method\":\"Network.getResponseBody\"," +
@@ -2793,7 +2631,7 @@ public class BulkScanPanel {
             }
 
             // 4.5b — Response bodies (JSON and JS only; HTML is handled by the main fetch path)
-            int cdpBodyId = 500; // start above the IDs used in Steps 1–3 (1,2,3)
+            int cdpBodyId = inlineBodyIdCounter[0] + 100_000; // never collides with inline fetch ids
             for (java.util.Map.Entry<String, String> re : cdpRespTypes.entrySet()) {
                 if (!running.get()) break;
                 String reqId = re.getKey();
@@ -2806,9 +2644,9 @@ public class BulkScanPanel {
                                  || uLc.endsWith(".json");
                 boolean isJs   = ctLc.contains("javascript") || ctLc.contains("ecmascript")
                                  || uLc.endsWith(".js") || uLc.endsWith(".mjs");
-                if (!isJson && !isJs) continue;
+                if (ScanSettings.isBinaryMedia(ct) || ctLc.startsWith("text/css")) continue;
                 // Skip URLs already scanned by the static-fetch or sitemap path
-                if (seenUrls.contains(reqUrl)) continue;
+                if (fetchedUrls.contains(reqUrl)) continue;
                 try {
                     final int myId = cdpBodyId++;
                     tabWs.sendText(
@@ -2847,7 +2685,7 @@ public class BulkScanPanel {
                     }
                 } catch (Exception ex) {
                     if (debugModeBox.isSelected())
-                        api.logging().logToOutput(
+                        logOut(
                                 "[Headless] CDP getResponseBody error for " + reqUrl
                                 + ": " + ex.getMessage());
                 }
@@ -2855,9 +2693,30 @@ public class BulkScanPanel {
 
             // Step 5 (URL replay via Java HttpClient) removed: with --proxy-server active,
             // Chrome already routes all traffic through Burp during the CDP window above.
-            // Replaying URLs again would cause the same URLs to be scanned twice per URL,
+            // Replaying URLs again would cause the same URLs to be scanned twice,
             // doubling scan work and significantly increasing scan time.
 
+            // Rendered DOM: scripts injected at runtime appear here and nowhere else
+            try {
+                tabWs.sendText("{\"id\":999999,\"method\":\"Runtime.evaluate\",\"params\":"
+                        + "{\"expression\":\"document.documentElement.outerHTML\",\"returnByValue\":true}}", true)
+                     .get(3, TimeUnit.SECONDS);
+                long domDeadline = System.currentTimeMillis() + 4_000;
+                while (System.currentTimeMillis() < domDeadline) {
+                    String msg = tabInbox.poll(300, TimeUnit.MILLISECONDS);
+                    if (msg == null) continue;
+                    JsonObject dj = gParseObject(msg);
+                    if (dj == null || gOptInt(dj, "id", -1) != 999999) continue;
+                    JsonObject r1 = gOptObject(dj, "result");
+                    JsonObject r2 = r1 != null ? gOptObject(r1, "result") : null;
+                    String dom = r2 != null ? gOptString(r2, "value", null) : null;
+                    if (dom != null && dom.length() <= ScanSettings.MAX_SCAN_BYTES) return dom;
+                    break;
+                }
+            } catch (Exception ex) {
+                debugLog("[Headless] DOM capture failed for " + pageUrl + ": " + ex);
+            }
+            return null;
             } finally {
                 closeCdpWs(tabWs);
             }
@@ -2868,6 +2727,7 @@ public class BulkScanPanel {
         } catch (Exception e) {
             debugLog("[Headless] CDP error for " + pageUrl + ": " + e.toString());
         }
+        return null;
     }
 
     /** Creates a CDP WebSocket listener that feeds each complete message into {@code inbox}. */
@@ -2961,11 +2821,25 @@ public class BulkScanPanel {
     }
 
     /** Returns the registrable domain (last two DNS labels) of a host, or the host for IPs. */
+    /** Common two-label public suffixes, so example.co.uk is not lumped together with every *.co.uk host. */
+    private static final Set<String> TWO_LABEL_SUFFIXES = Set.of(
+            "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp", "ne.jp",
+            "co.in", "co.kr", "com.br", "com.mx", "com.ar", "com.cn", "com.tw", "com.hk", "com.sg", "com.tr",
+            "co.za", "com.my", "co.id", "com.ph", "com.vn", "com.pk", "co.il", "com.sa", "com.eg", "com.ng");
+
     private static String registrableDomain(String host) {
         if (host == null || host.isEmpty()) return "";
-        if (host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) return host;  // IPv4 — use as-is
+        if (host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+") || host.contains(":")) return host;  // IPv4 / IPv6 — as-is
         String[] p = host.split("\\.");
+        if (p.length >= 3 && TWO_LABEL_SUFFIXES.contains(p[p.length - 2] + "." + p[p.length - 1]))
+            return p[p.length - 3] + "." + p[p.length - 2] + "." + p[p.length - 1];
         return p.length >= 2 ? p[p.length - 2] + "." + p[p.length - 1] : host;
+    }
+
+    /** Same host, or a sibling host of the same site (static.example.com for app.example.com). */
+    private static boolean sameSite(String baseHost, String host) {
+        if (baseHost == null || host == null) return false;
+        return host.equals(baseHost) || registrableDomain(host).equals(registrableDomain(baseHost));
     }
 
     /** True when {@code candidateUrl} shares the same registrable domain as {@code targetUrl}. */
@@ -2977,6 +2851,7 @@ public class BulkScanPanel {
         } catch (Exception e) { return false; }
     }
 
+    /** True when the URL's host is a raw IPv4 address (no hostname validation possible). */
     /** Overload used when no HttpRequestResponse is available (ScopeMonitor listener). */
     private void scanAndAppend(String body, String contentType, String url) {
         scanAndAppend(body, contentType, url, null);
@@ -2999,13 +2874,16 @@ public class BulkScanPanel {
         // CDN check: skip analytics/asset CDN domains regardless of how this path was reached.
         if (url != null && settings.isExternalCdn(url)) return;
         // URL-based dedup: same URL = same resource, no need to scan twice.
-        if (!seenUrls.add(url != null ? url : "")) return;
+        // Same URL with a different body (another /graphql or /api/token response) is scanned again;
+        // the same body at the same URL is not.
+        if (!seenUrls.add((url != null ? url : "") + "\0" + body.length() + ":" + body.hashCode())) return;
+        if (url != null) fetchedUrls.add(url);
         // Tag the URL with its content type for clear source identification.
         String labelledUrl = sourceLabel(url, contentType);
         List<SecretScanner.DebugEntry> localDbg = new ArrayList<>();
-        List<SecretFinding> findings = scanner.scanTextDebug(body, contentType, labelledUrl, localDbg);
+        List<SecretFinding> findings = scanner.scanTextDebug(body, contentType, labelledUrl, localDbg, bulkTier);
         debugEntries.addAll(localDbg);
-        api.logging().logToOutput("[BulkScan] " + findings.size() + " finding(s) in: " + labelledUrl);
+        logOut("[BulkScan] " + findings.size() + " finding(s) in: " + labelledUrl);
         debugLog("[BulkScan] body=" + body.length() + " chars: " + labelledUrl);
         // Push to Burp Dashboard / site map: one AuditIssue per (URL, rule) group.
         // fetchUrl() returns requestResponse=null (Java HttpClient, not Burp proxy), so rr
@@ -3050,7 +2928,7 @@ public class BulkScanPanel {
             for (java.util.List<SecretFinding> group : grouped.values()) {
                 if (!SitemapDeduplicator.shouldAdd(group)) continue;
                 try { api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rrForIssue, issueUrl)); }
-                catch (Exception e) { api.logging().logToError("[SecretSifter] siteMap.add failed for " + url + ": " + e); }
+                catch (Exception e) { logErr("[SecretSifter] siteMap.add failed for " + url + ": " + e); }
             }
         }
         // Target attribution priority:
@@ -3063,7 +2941,8 @@ public class BulkScanPanel {
         // Capture both before crossing to EDT — ThreadLocal is not available on the EDT.
         String originTarget = currentTargetUrl.get() != null ? currentTargetUrl.get() : "";
         String originNorm   = originTarget.isEmpty() ? "" : toOrigin(originTarget);
-        final int saGen = scanGeneration.get();
+        final Integer tg = taskGeneration.get();
+        final int saGen = tg != null ? tg : scanGeneration.get();
         for (SecretFinding f : findings) {
             String hostBased = lookupTargetByHost(f.sourceUrl());
             String chosen    = hostBased != null ? hostBased : originNorm;
@@ -3102,6 +2981,14 @@ public class BulkScanPanel {
         if (hostBased != null && (f.targetUrl() == null || f.targetUrl().isEmpty()
                 || !hostBased.equals(toOrigin(f.targetUrl())))) {
             f = f.withTargetUrl(hostBased);
+        }
+
+        // No input-target context (Scan Site Map, HAR import): attribute the finding to its own
+        // host origin so the Target URL column is always populated.
+        if (f.targetUrl() == null || f.targetUrl().isEmpty()) {
+            String clean = f.sourceUrl() != null ? f.sourceUrl().replaceAll(" \\[.*?\\]", "") : null;
+            String selfOrigin = (clean != null && !clean.isBlank()) ? toOrigin(clean) : null;
+            if (selfOrigin != null && !selfOrigin.isBlank()) f = f.withTargetUrl(selfOrigin);
         }
 
         // Strict scope: drop findings whose source host is not in the target list.
@@ -3174,15 +3061,15 @@ public class BulkScanPanel {
         // genuinely different secrets at the same line (e.g. two btoa credential pairs in
         // a minified JS file both at line 1) are each reported as separate findings.
         if (f.lineNumber() > 0) {
-            boolean positionOnly = "JWT_TOKEN_001".equals(f.ruleId());
+            // The value is always part of the key: two different JWTs on one minified line (an
+            // anon key and a service_role key) are two findings.
             String posKey = dedupUrl + "\0" + f.ruleId() + "\0" + f.lineNumber() + "\0" + f.keyName()
-                    + (positionOnly ? "" : "\0" + normVal);
+                    + "\0" + normVal;
             if (!seenPositions.add(posKey)) return;
         }
         tableFindings.add(f);
-        int row = tableModel.getRowCount() + 1;
         tableModel.addRow(new Object[]{
-                row,
+                f.issueId(),
                 f.severity(),
                 f.confidence(),
                 f.ruleId(),
@@ -3228,15 +3115,23 @@ public class BulkScanPanel {
         return url;
     }
 
-    // =========================================================================
-    // HTTP fetching via Burp's HTTP engine (api.http().sendRequest)
-    // =========================================================================
-    //
-    // All bulk-scan fetches are issued through Burp's own HTTP API rather than a
-    // java.net.http.HttpClient. Burp performs the request, follows redirects, and applies its own
-    // TLS handling. Upstream certificate verification is Burp's responsibility and is left at
-    // Burp's default (which accepts the self-signed / internal certificates common in enterprise
-    // testing), so the extension contains no HTTP client and no certificate-trust code of its own.
+    /** "SS-MMDDYY-XXXXXX" -> "YYMMDD-XXXXXX" so IDs sort by first-seen date; other text unchanged. */
+    static String issueIdSortKey(String id) {
+        if (id != null && id.length() >= 16 && id.startsWith("SS-") && id.charAt(9) == '-')
+            return id.substring(7, 9) + id.substring(3, 7) + id.substring(9);
+        return id == null ? "" : id;
+    }
+
+    /** URL query strings and fragments can carry tokens: logs show them as "?…". */
+    private static final java.util.regex.Pattern LOG_URL_QUERY =
+            java.util.regex.Pattern.compile("((?:https?|wss?)://[^\\s?#\"'<>]+)[?#][^\\s\"'<>]*");
+
+    static String redactUrls(String msg) {
+        return msg == null ? null : LOG_URL_QUERY.matcher(msg).replaceAll("$1?…");
+    }
+
+    private void logOut(String msg) { if (api != null) api.logging().logToOutput(redactUrls(msg)); }
+    private void logErr(String msg) { if (api != null) api.logging().logToError(redactUrls(msg)); }
 
     private record FetchResult(String body, String contentType,
                                String finalUrl, HttpRequestResponse requestResponse,
@@ -3244,10 +3139,10 @@ public class BulkScanPanel {
 
     private FetchResult fetchUrl(String url) {
         try {
-            // Issue the GET through Burp's own HTTP engine. Burp handles TLS (including self-signed
-            // / internal certs, per its default upstream-TLS behaviour) and follows redirects, so no
-            // HTTP client or certificate-trust code lives in the extension. The returned request's
-            // url() reflects the final URL after redirects, which processUrl() uses for SSO detection.
+            // Issue the GET through Burp's own HTTP engine. Burp handles TLS (including self-signed /
+            // internal certs, per its default upstream-TLS behaviour) and follows redirects, so no HTTP
+            // client or certificate-trust code lives in the extension. The returned request's url()
+            // reflects the final URL after redirects, which processUrl() uses for SSO detection.
             burp.api.montoya.http.message.requests.HttpRequest req =
                     burp.api.montoya.http.message.requests.HttpRequest.httpRequestFromUrl(url)
                         .withHeader("User-Agent",
@@ -3258,11 +3153,9 @@ public class BulkScanPanel {
                                 "text/html,application/xhtml+xml,application/xml;"
                                 + "q=0.9,image/avif,image/webp,*/*;q=0.8")
                         .withHeader("Accept-Language", "en-US,en;q=0.9")
-                        // Only gzip+deflate — brotli (br) omitted: no Java stdlib decoder.
-                        // decompressBytes() normalises the body below if Burp returns it encoded.
+                        // Only gzip+deflate are requested; decompressBytes() normalises the body below.
                         .withHeader("Accept-Encoding", "gzip, deflate")
                         .withHeader("Cache-Control", "max-age=0");
-
             burp.api.montoya.http.RequestOptions opts =
                     burp.api.montoya.http.RequestOptions.requestOptions()
                         .withRedirectionMode(burp.api.montoya.http.RedirectionMode.ALWAYS)
@@ -3276,21 +3169,35 @@ public class BulkScanPanel {
             }
 
             // Final URL after redirects — the returned request is the last one Burp sent.
-            String finalUrl = (rr.request() != null && rr.request().url() != null)
-                    ? rr.request().url() : url;
+            String finalUrl = (rr.request() != null && rr.request().url() != null) ? rr.request().url() : url;
             int status = resp.statusCode();
-            // 4xx/5xx: return a result with null body so callers get the status code
-            // (used by processUrl() to distinguish auth errors from connection failures)
-            if (status >= 400) {
-                return new FetchResult(null, null, finalUrl, null, status);
-            }
             String contentType     = resp.headerValue("Content-Type");
             String contentEncoding = resp.headerValue("Content-Encoding");
-            byte[] raw             = resp.body() != null ? resp.body().getBytes() : new byte[0];
-            String body            = decompressBytes(raw, contentEncoding, finalUrl);
+            byte[] raw = resp.body() != null ? resp.body().getBytes() : new byte[0];
+
+            // Enforce the scan size cap (Burp returns the whole body; cap before decompress/scan).
+            if (raw.length > ScanSettings.MAX_SCAN_BYTES) {
+                debugLog("[fetchUrl] body larger than " + (ScanSettings.MAX_SCAN_BYTES >> 20)
+                        + " MB, skipped: " + finalUrl);
+                return new FetchResult(status >= 400 ? null : "",
+                        status >= 400 ? null : contentType, finalUrl, null, status);
+            }
+
+            // 4xx/5xx: error bodies leak secrets too (stack traces, 401 JSON echoing config) — scan
+            // them here, then return the status-only result callers expect.
+            if (status >= 400) {
+                if (raw.length > 20 && !ScanSettings.isBinaryMedia(contentType)) {
+                    String errBody = decompressBytes(raw, contentEncoding, finalUrl);
+                    scanAndAppend(errBody, contentType != null ? contentType : "text/plain",
+                            finalUrl + " [HTTP " + status + "]");
+                }
+                return new FetchResult(null, null, finalUrl, null, status);
+            }
+
+            String body = decompressBytes(raw, contentEncoding, finalUrl);
             return new FetchResult(body, contentType, finalUrl, null, status);
         } catch (Exception e) {
-            // Log the full exception chain so the root cause is visible in Extensions → Output.
+            // Log the full exception chain so the root cause is visible in Extensions > Output.
             StringBuilder sb = new StringBuilder("[fetchUrl] ERROR for ").append(url).append(" — ");
             Throwable t = e;
             while (t != null) {
@@ -3312,6 +3219,19 @@ public class BulkScanPanel {
      * @param url  URL string used only for diagnostic log messages
      * @return decompressed body as UTF-8 text
      */
+    /** Copies a decompressing stream, giving up (null) past {@link ScanSettings#MAX_SCAN_BYTES}. */
+    private static String inflateCapped(java.io.InputStream in, int sizeHint) throws java.io.IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(
+                (int) Math.min((long) sizeHint * 4, ScanSettings.MAX_SCAN_BYTES));
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            if (bos.size() + n > ScanSettings.MAX_SCAN_BYTES) return null;
+            bos.write(buf, 0, n);
+        }
+        return bos.toString(StandardCharsets.UTF_8);
+    }
+
     private String decompressBytes(byte[] raw, String enc, String url) {
         if (raw == null || raw.length == 0) return "";
         if (enc == null || enc.isBlank()) return new String(raw, StandardCharsets.UTF_8);
@@ -3319,14 +3239,14 @@ public class BulkScanPanel {
 
         if (enc.contains("gzip")) {
             try (java.util.zip.GZIPInputStream gis = new java.util.zip.GZIPInputStream(
-                         new ByteArrayInputStream(raw));
-                 ByteArrayOutputStream bos = new ByteArrayOutputStream(raw.length * 4)) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = gis.read(buf)) != -1) bos.write(buf, 0, n);
-                String result = bos.toString(StandardCharsets.UTF_8);
-                debugLog("[fetchUrl] gzip decompressed "
-                        + raw.length + " → " + bos.size() + " bytes: " + url);
+                         new ByteArrayInputStream(raw))) {
+                String result = inflateCapped(gis, raw.length);
+                if (result == null) {
+                    debugLog("[fetchUrl] gzip body expands past " + (ScanSettings.MAX_SCAN_BYTES >> 20)
+                            + " MB, skipped: " + url);
+                    return "";
+                }
+                debugLog("[fetchUrl] gzip decompressed " + raw.length + " → " + result.length() + " chars: " + url);
                 return result;
             } catch (Exception e) {
                 debugLog("[fetchUrl] gzip decompress failed ("
@@ -3337,12 +3257,14 @@ public class BulkScanPanel {
 
         if (enc.contains("deflate")) {
             try (java.util.zip.InflaterInputStream iis = new java.util.zip.InflaterInputStream(
-                         new ByteArrayInputStream(raw));
-                 ByteArrayOutputStream bos = new ByteArrayOutputStream(raw.length * 4)) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = iis.read(buf)) != -1) bos.write(buf, 0, n);
-                return bos.toString(StandardCharsets.UTF_8);
+                         new ByteArrayInputStream(raw))) {
+                String result = inflateCapped(iis, raw.length);
+                if (result == null) {
+                    debugLog("[fetchUrl] deflate body expands past " + (ScanSettings.MAX_SCAN_BYTES >> 20)
+                            + " MB, skipped: " + url);
+                    return "";
+                }
+                return result;
             } catch (Exception e) {
                 debugLog("[fetchUrl] deflate decompress failed ("
                         + e.toString() + "), using raw body: " + url);
@@ -3537,29 +3459,54 @@ public class BulkScanPanel {
                     JsonObject response = entry.getAsJsonObject("response");
                     String     url      = gOptString(request, "url", "");
                     int        status   = gOptInt(response, "status", 0);
-                    if (status < 200 || status >= 300) continue;
+                    if (url.isBlank() || settings.isExternalCdn(url)) continue;
+
+                    // Request side: headers (Authorization, x-api-key, cookies) and posted data
+                    if (request != null) {
+                        StringBuilder hdrs = new StringBuilder();
+                        JsonArray rh = request.has("headers") && request.get("headers").isJsonArray()
+                                ? request.getAsJsonArray("headers") : new JsonArray();
+                        for (JsonElement he : rh) {
+                            if (!he.isJsonObject()) continue;
+                            String hn = gOptString(he.getAsJsonObject(), "name", "");
+                            String hv = gOptString(he.getAsJsonObject(), "value", "");
+                            if (!hn.isBlank() && !hv.isBlank() && !hn.startsWith(":"))
+                                hdrs.append(hn).append(": ").append(hv).append('\n');
+                        }
+                        if (hdrs.length() > 0) scanAndAppend(hdrs.toString(), "text/plain", url + " [REQ-HEADERS]");
+                        JsonObject post = gOptObject(request, "postData");
+                        if (post != null) {
+                            String pt = gOptString(post, "text", "");
+                            if (pt.length() > 20 && pt.length() <= ScanSettings.MAX_SCAN_BYTES)
+                                scanAndAppend(pt, gOptString(post, "mimeType", "text/plain"), url + " [REQ-BODY]");
+                        }
+                    }
 
                     JsonObject content  = gOptObject(response, "content");
                     if (content == null) continue;
                     String mimeType = gOptString(content, "mimeType", "");
                     String body     = gOptString(content, "text",     "");
                     if (body.isBlank()) continue;
+                    // DevTools stores binary / compressed bodies base64-encoded
+                    if ("base64".equalsIgnoreCase(gOptString(content, "encoding", ""))) {
+                        if (ScanSettings.isBinaryMedia(mimeType)) continue;
+                        try {
+                            body = new String(java.util.Base64.getMimeDecoder().decode(body), StandardCharsets.UTF_8);
+                        } catch (IllegalArgumentException e) { continue; }
+                    }
+                    // Every textual response, any status: error pages and 401/500 JSON leak secrets too
+                    if (ScanSettings.isBinaryMedia(mimeType)) continue;
+                    if (body.length() > ScanSettings.MAX_SCAN_BYTES) {
+                        debugLog("[HAR] body larger than " + (ScanSettings.MAX_SCAN_BYTES >> 20) + " MB, skipped: " + url);
+                        continue;
+                    }
 
-                    // Only scan text-based content types that may contain secrets
-                    String mt = mimeType.toLowerCase();
-                    if (!mt.contains("javascript") && !mt.contains("text/html")
-                            && !mt.contains("application/json") && !mt.contains("text/plain")
-                            && !mt.contains("application/xml") && !mt.contains("text/xml")) continue;
-
-                    if (settings.isExternalCdn(url)) continue;
-
-                    final String fUrl  = url;
-                    final String fMime = mimeType;
-                    final String fBody = body;
-                    SwingUtilities.invokeLater(() -> {
-                        currentFileLabel.setText("→ " + fUrl);
-                        scanAndAppend(fBody, fMime, fUrl);
-                    });
+                    // Scan on this background thread (scanAndAppend is also called from bulk
+                    // worker threads); only the label update goes to the Swing thread.
+                    final String fUrl = url;
+                    SwingUtilities.invokeLater(() -> currentFileLabel.setText("→ " + fUrl));
+                    String label = (status >= 400) ? url + " [HTTP " + status + "]" : url;
+                    scanAndAppend(body, mimeType.isBlank() ? null : mimeType, label);
                     scanned++;
                 }
 
@@ -3601,6 +3548,7 @@ public class BulkScanPanel {
         tableFindings.clear();
         debugEntries.clear();
         seenUrls.clear();
+        fetchedUrls.clear();
         seenFindings.clear();
         scanner.clearRequestDedup();
         siteMapIndex = Collections.emptyMap();
@@ -3676,9 +3624,11 @@ public class BulkScanPanel {
         File out = ensureExtension(fc.getSelectedFile(), ".csv");
         try (PrintWriter pw = new PrintWriter(new FileWriter(out, StandardCharsets.UTF_8))) {
             // Header
-            pw.println("Rule ID,Rule Name,Key,Value,Severity,Confidence,Line,Target URL,Source URL,Context");
+            pw.println("Issue ID,Occurrence,Fingerprint,Installation,Rule ID,Rule Name,Key,Value,Severity,Confidence,Line,Target URL,Source URL,Context");
+            String install = com.secretscanner.core.IssueRegistry.current().installTag();
             for (SecretFinding f : snapshot) {
-                pw.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\"%n",
+                pw.printf("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d,\"%s\",\"%s\",\"%s\"%n",
+                        f.issueId(), f.occurrenceRef(), f.fingerprint(), install,
                         csvEsc(f.ruleId()), csvEsc(f.ruleName()),
                         csvEsc(f.keyName()), csvEsc(f.matchedValue()),
                         f.severity(), f.confidence(), f.lineNumber(),
@@ -3686,6 +3636,7 @@ public class BulkScanPanel {
                         csvEsc(f.sourceUrl()),
                         csvEsc(f.context() != null ? f.context().replace("\n", " ") : ""));
             }
+            restrictToOwner(out.toPath());
             statusLabel.setText("CSV saved: " + out.getName());
             statusLabel.setForeground(new Color(0, 130, 0));
         } catch (Exception ex) {
@@ -3763,6 +3714,49 @@ public class BulkScanPanel {
         }
     }
 
+    private void exportSarif() {
+        writeExport("Export findings as SARIF", "secretsifter-findings.sarif", "sarif",
+                snapshot -> SarifWriter.write(snapshot, SecretSifterVersion.VALUE));
+    }
+
+    private void exportRedactedHtml() {
+        writeExport("Export redacted HTML report", "secretsifter-report-redacted.html", "html",
+                snapshot -> HtmlReportGenerator.generate(snapshot, null, "html", true));
+    }
+
+    /** Save dialog + owner-only file permissions for one generated export. */
+    private void writeExport(String title, String defaultName, String ext,
+                             java.util.function.Function<List<SecretFinding>, String> render) {
+        List<SecretFinding> snapshot = collectForExport();
+        if (snapshot.isEmpty()) {
+            JOptionPane.showMessageDialog(rootPanel, "No findings to export.", "Export", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle(title);
+        fc.setFileFilter(new FileNameExtensionFilter(ext.toUpperCase() + " files (*." + ext + ")", ext));
+        fc.setSelectedFile(new File(defaultName));
+        if (fc.showSaveDialog(rootPanel) != JFileChooser.APPROVE_OPTION) return;
+        File out = ensureExtension(fc.getSelectedFile(), "." + ext);
+        try {
+            java.nio.file.Files.writeString(out.toPath(), render.apply(snapshot), StandardCharsets.UTF_8);
+            restrictToOwner(out.toPath());
+            statusLabel.setText("Saved: " + out.getName());
+            statusLabel.setForeground(new Color(0, 130, 0));
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(rootPanel, "Failed to save: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Exports hold secrets: readable by the current user only, where the filesystem supports it. */
+    static void restrictToOwner(java.nio.file.Path p) {
+        try {
+            java.nio.file.Files.setPosixFilePermissions(p, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (Exception ignored) {
+            // non-POSIX (Windows): files inherit the user profile's ACLs
+        }
+    }
+
     private void exportJson() {
         List<SecretFinding> snapshot = collectForExport();
         if (snapshot.isEmpty()) {
@@ -3779,6 +3773,10 @@ public class BulkScanPanel {
             JsonArray arr = new JsonArray();
             for (SecretFinding f : snapshot) {
                 JsonObject obj = new JsonObject();
+                obj.addProperty("issueId",      f.issueId());
+                obj.addProperty("occurrence",   f.occurrenceRef());
+                obj.addProperty("fingerprint",  f.fingerprint());
+                obj.addProperty("installation", com.secretscanner.core.IssueRegistry.current().installTag());
                 obj.addProperty("ruleId",       f.ruleId());
                 obj.addProperty("ruleName",     f.ruleName());
                 obj.addProperty("keyName",      f.keyName());
@@ -3792,6 +3790,7 @@ public class BulkScanPanel {
                 arr.add(obj);
             }
             pw.print(new GsonBuilder().setPrettyPrinting().create().toJson(arr));
+            restrictToOwner(out.toPath());
             statusLabel.setText("JSON saved: " + out.getName());
             statusLabel.setForeground(new Color(0, 130, 0));
         } catch (Exception ex) {
@@ -3995,7 +3994,14 @@ public class BulkScanPanel {
 
     private static String csvEsc(String s) {
         if (s == null) return "";
-        return s.replace("\"", "\"\"");
+        return neutralizeFormula(s).replace("\"", "\"\"");
+    }
+
+    /** Stops spreadsheet apps treating a scanned value as a formula (=, +, -, @, tab, CR first). */
+    static String neutralizeFormula(String s) {
+        if (s == null || s.isEmpty()) return s == null ? "" : s;
+        char c = s.charAt(0);
+        return (c == '=' || c == '+' || c == '-' || c == '@' || c == '\t' || c == '\r') ? "'" + s : s;
     }
 
     // ── Gson helper utilities (replaces org.json convenience methods) ──────────
@@ -4113,7 +4119,7 @@ public class BulkScanPanel {
     /** Logs to Burp's output only when the Debug checkbox is checked. */
     private void debugLog(String msg) {
         if (debugModeBox != null && debugModeBox.isSelected())
-            api.logging().logToOutput(msg != null ? msg : "");
+            logOut(msg != null ? msg : "");
     }
 
     /** Creates a coloured badge toggle button for the given severity with an initial count.
@@ -4170,7 +4176,7 @@ public class BulkScanPanel {
                 result.add(new SecretFinding(f.ruleId(), f.ruleName(), f.keyName(),
                         f.matchedValue(), sev, conf, f.lineNumber(), f.context(),
                         f.sourceUrl(), f.targetUrl() != null ? f.targetUrl() : "",
-                        f.matchOffset()));
+                        f.matchOffset(), f.meta()));
             }
         }
         return result;
@@ -4196,7 +4202,11 @@ public class BulkScanPanel {
         }
     }
 
+
     private class SeverityCellRenderer extends DefaultTableCellRenderer {
+        // cell text comes from scanned pages: never interpret it as HTML (a value starting with
+        // <html> could otherwise make the table fetch remote images from the tester's machine)
+        { putClientProperty("html.disable", Boolean.TRUE); }
         @Override
         public Component getTableCellRendererComponent(JTable table, Object value,
                 boolean selected, boolean focused, int row, int col) {
@@ -4225,7 +4235,7 @@ public class BulkScanPanel {
                 c.setBackground(bg);
             }
             Color fg = selected ? Color.WHITE : (userMarkedNoise ? new Color(120, 120, 120) : Color.BLACK);
-            if (col == COL_URL || col == COL_TARGET_URL || col == 9) {
+            if (col == COL_URL || col == COL_TARGET_URL || col == COL_CONTEXT) {
                 setFont(getFont().deriveFont(Font.PLAIN, 11f));
                 setForeground(fg);
             } else {

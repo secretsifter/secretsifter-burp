@@ -18,12 +18,37 @@ public class ScanSettings {
 
     public enum ScanTier { FAST, LIGHT, FULL }
 
+    /** Largest response body scanned; bigger bodies are skipped (and logged) to bound memory. */
+    public static final int MAX_SCAN_BYTES = 20 * 1024 * 1024;
+
+    /**
+     * True for binary media types that cannot carry text secrets (images other than SVG,
+     * video, audio, fonts). Their bodies are not scanned.
+     */
+    public static boolean isBinaryMedia(String contentType) {
+        if (contentType == null) return false;
+        String ct = contentType.toLowerCase(java.util.Locale.ROOT).trim();
+        if (ct.startsWith("image/")) return !ct.startsWith("image/svg");
+        return ct.startsWith("video/") || ct.startsWith("audio/") || ct.startsWith("font/")
+                || ct.startsWith("application/font-") || ct.startsWith("application/x-font-");
+    }
+
     // ---- preference keys ----
     private static final String KEY_ENABLED        = "ss.enabled";
     private static final String KEY_TIER           = "ss.tier";
     private static final String KEY_ENTROPY        = "ss.entropy";        // stored as String
     private static final String KEY_PII            = "ss.pii";
     private static final String KEY_CDNLIST        = "ss.cdnlist";        // newline-separated
+    private static final String KEY_CDN_DEFAULTS_SEEN = "ss.cdnlist.defaultsSeen"; // defaults known at last save
+
+    /** Built-in CDN defaults, so a save can record which ones the user has seen. */
+    private static final List<String> CDN_DEFAULTS = List.copyOf(new ScanSettings().cdnBlocklist);
+
+    /** Old bare-label entries that never matched a host, mapped to real domains ("" = drop). */
+    private static final java.util.Map<String, String> LEGACY_CDN_ENTRIES = java.util.Map.of(
+            "cdnjs", "cdnjs.cloudflare.com", "jsdelivr", "jsdelivr.net", "unpkg", "unpkg.com",
+            "stackpath", "bootstrapcdn.com", "maxcdn", "bootstrapcdn.com", "doubleclick", "doubleclick.net",
+            "firebase", "");
     private static final String KEY_SCAN_REQUESTS  = "ss.scan_requests";  // scan req headers/body
     private static final String KEY_KEY_BLOCKLIST  = "ss.keyblocklist";   // newline-separated key name suppression list
     private static final String KEY_KEY_ALLOWLIST  = "ss.keyallowlist";   // newline-separated key name force-include list
@@ -64,11 +89,12 @@ public class ScanSettings {
 
     private final List<String> cdnBlocklist = new ArrayList<>(Arrays.asList(
             // JS/CSS CDNs — static asset delivery, no secrets expected
-            "cdnjs", "jsdelivr", "unpkg", "ajax.googleapis.com",
-            "ajax.microsoft.com", "code.jquery.com", "stackpath", "maxcdn",
-            "fonts.googleapis.com", "fonts.gstatic.com", "gstatic.com",
+            "cdnjs.cloudflare.com", "jsdelivr.net", "unpkg.com", "ajax.googleapis.com",
+            "ajax.microsoft.com", "code.jquery.com", "bootstrapcdn.com", "ajax.aspnetcdn.com",
+            "fonts.googleapis.com", "fonts.gstatic.com", "gstatic.com", "polyfill.io",
             // Analytics / tracking — no secrets, just noise
-            "firebase", "segment.com", "segment.io", "doubleclick",
+            "segment.com", "segment.io", "doubleclick.net",
+            "cdn.amplitude.com", "cdn.mxpnl.com", "cdn.heapanalytics.com", "cdn.optimizely.com",
             "googletagmanager.com", "hotjar.com",
             "cloudflareinsights.com", "cdn.cookielaw.org",
             "dc.services.visualstudio.com",
@@ -149,8 +175,17 @@ public class ScanSettings {
     public synchronized boolean isKeyBlocked(String keyName) {
         if (keyName == null || keyName.isBlank()) return false;
         String kl = keyName.toLowerCase();
+        // Framework "public" env prefixes (NEXT_PUBLIC_, VITE_PUBLIC_ ...) mark values the build
+        // ships to the browser on purpose. A secret-named key under such a prefix
+        // (NEXT_PUBLIC_STRIPE_SECRET_KEY, NEXT_PUBLIC_DB_PASSWORD) is a mistake worth reporting.
+        boolean secretNamed = kl.contains("secret") || kl.contains("password") || kl.contains("passwd")
+                || kl.contains("private") || kl.contains("service_role") || kl.contains("servicerole");
         for (String entry : keyBlocklist) {
-            if (!entry.isBlank() && kl.contains(entry.toLowerCase())) return true;
+            if (entry.isBlank()) continue;
+            String e = entry.toLowerCase();
+            if (!kl.contains(e)) continue;
+            if (secretNamed && e.endsWith("public_")) continue;
+            return true;
         }
         return false;
     }
@@ -204,8 +239,8 @@ public class ScanSettings {
         } else {
             host = urlOrHost.toLowerCase();
         }
-        // Broad heuristic: any hostname starting with "cdn." is an asset CDN
-        if (host.startsWith("cdn.") || host.equals("cdn")) return true;
+        // No blanket "cdn.*" rule: first-party asset hosts (cdn.<company>.com) carry the
+        // application's own bundles. Third-party CDNs are listed by domain in cdnBlocklist.
         synchronized (this) {
             for (String entry : cdnBlocklist) {
                 // Domain-suffix match: entry "segment.com" blocks cdn.segment.com,
@@ -231,6 +266,7 @@ public class ScanSettings {
             prefs.setBoolean(KEY_SCAN_REQUESTS,       scanRequestsEnabled);
             prefs.setBoolean(KEY_ALLOW_INSECURE_SSL,  allowInsecureSsl);
             prefs.setString(KEY_CDNLIST,              String.join("\n", getCdnBlocklist()));
+            prefs.setString(KEY_CDN_DEFAULTS_SEEN,    String.join("\n", CDN_DEFAULTS));
             prefs.setString(KEY_KEY_BLOCKLIST,    String.join("\n", getKeyBlocklist()));
             prefs.setString(KEY_KEY_ALLOWLIST,    String.join("\n", getKeyAllowlist()));
             prefs.setString(KEY_CUSTOM_RULES,         String.join("\n", getCustomRules()));
@@ -269,15 +305,24 @@ public class ScanSettings {
 
             String cdnStr = prefs.getString(KEY_CDNLIST);
             if (cdnStr != null && !cdnStr.isBlank()) {
-                List<String> loaded = new ArrayList<>();
+                List<String> defaults = getCdnBlocklist();
+                java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
                 for (String line : cdnStr.split("\n")) {
                     String trimmed = line.trim();
-                    if (!trimmed.isEmpty()) loaded.add(trimmed);
+                    if (trimmed.isEmpty()) continue;
+                    String fixed = LEGACY_CDN_ENTRIES.getOrDefault(trimmed.toLowerCase(java.util.Locale.ROOT), trimmed);
+                    if (!fixed.isEmpty()) merged.add(fixed);
                 }
-                // Merge with built-in defaults: ensures entries added in updated JARs
-                // are never silently dropped when old preferences are loaded on upgrade.
-                java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(getCdnBlocklist());
-                merged.addAll(loaded);
+                // Add only defaults this user has never seen (introduced by a newer JAR); defaults
+                // the user deliberately removed stay removed.
+                String seenStr = prefs.getString(KEY_CDN_DEFAULTS_SEEN);
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                if (seenStr != null) {
+                    for (String l : seenStr.split("\n")) if (!l.isBlank()) seen.add(l.trim());
+                } else {
+                    seen.addAll(merged);                  // first load after upgrade: keep the user's list
+                }
+                for (String d : defaults) if (!seen.contains(d)) merged.add(d);
                 setCdnBlocklist(new ArrayList<>(merged));
             }
 

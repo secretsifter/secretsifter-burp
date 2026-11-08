@@ -11,6 +11,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Core scanning engine — stateless (no shared mutable state in scan paths).
@@ -25,7 +26,7 @@ import java.util.regex.Matcher;
 public class SecretScanner {
 
     private static final int JSON_MAX_DEPTH    = 20;
-    private static final int JSON_MAX_FINDINGS = 50;
+    private static final int JSON_MAX_FINDINGS = 500;
 
     private final ScanSettings settings;
     private final Logging       logging;
@@ -164,9 +165,26 @@ public class SecretScanner {
         return scanRequestResponse(reqRes, null, null);
     }
 
+    /** Set while a user-requested rescan runs: request findings are not dropped as already seen. */
+    private static final ThreadLocal<Boolean> EXPLICIT_RESCAN = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
     /**
-     * Overload that accepts an eagerly extracted response body and Content-Type header
-     * (used when the caller has already read the body off an intercepted response).
+     * Right-click rescan: like {@link #scanRequestResponse(HttpRequestResponse)}, but credentials
+     * in the request are reported even if the proxy already saw them on this host (they are still
+     * recorded, so later proxy traffic does not report them again).
+     */
+    public List<SecretFinding> scanRequestResponseExplicit(HttpRequestResponse reqRes) {
+        EXPLICIT_RESCAN.set(Boolean.TRUE);
+        try {
+            return scanRequestResponse(reqRes, null, null);
+        } finally {
+            EXPLICIT_RESCAN.remove();
+        }
+    }
+
+    /**
+     * Overload that accepts an eagerly extracted response body
+     * and Content-Type header.
      *
      * <p>Burp's Montoya API {@code HttpRequestResponse.httpRequestResponse(req, interceptedResponse)}
      * may hold a <em>reference</em> to the live {@code InterceptedResponse} rather than copying
@@ -195,6 +213,7 @@ public class SecretScanner {
             // is a normal authenticated call, not a token-issuance endpoint, so
             // reporting the response JWT would produce noise for every authenticated API call.
             boolean requestHasBearerJwt = false;
+            Set<String> requestJwts = new HashSet<>();
             for (var hdr : request.headers()) {
                 String hdrNameLc = hdr.name().toLowerCase();
                 if (SKIP_HEADERS.contains(hdrNameLc)) continue;
@@ -208,6 +227,7 @@ public class SecretScanner {
                 if (stripped == null || stripped.length() < 10) continue;
                 if (isJwt(stripped)) {
                     requestHasBearerJwt = true;
+                    requestJwts.add(stripped);
                 } else {
                     requestHasCredentialHeaders = true;
                     break;
@@ -222,7 +242,8 @@ public class SecretScanner {
                 String contentType = responseCtHint   != null ? responseCtHint   :
                                      response         != null ? response.headerValue("Content-Type") : null;
                 String body        = responseBodyHint != null ? responseBodyHint :
-                                     response         != null ? response.bodyToString()              : null;
+                                     response         != null && isScannableBody(response, contentType)
+                                                              ? response.bodyToString()              : null;
                 if (body != null && !body.isBlank()) {
                     List<SecretFinding> respFindings = scanText(body, contentType, url);
                     if (requestHasCredentialHeaders) {
@@ -230,24 +251,20 @@ public class SecretScanner {
                         // Upgrade JWT findings to HIGH — this is a freshly issued token.
                         for (SecretFinding f : respFindings) {
                             if ("JWT_TOKEN_001".equals(f.ruleId())) {
-                                all.add(SecretFinding.of(f.ruleId(), f.ruleName(), f.keyName(),
-                                        f.matchedValue(), "HIGH", f.confidence(),
-                                        f.lineNumber(), f.context(), f.sourceUrl()));
+                                all.add(f.withSeverity("HIGH"));   // keeps offset, target and meta
                             } else {
                                 all.add(f);
                             }
                         }
                     } else if (requestHasBearerJwt) {
                         // Authenticated call: request already carries a JWT Bearer token.
-                        // Suppress generic JWT_TOKEN_001 to avoid noise on every authenticated
-                        // API endpoint — BUT always keep OAuth token-field findings (access_token,
-                        // refresh_token, id_token) since those are token-issuance endpoints.
+                        // Drop only the response JWTs that ARE the caller's own token echoed back;
+                        // any other JWT in the response (a service_role key, another user's token,
+                        // a freshly issued one) is a finding.
                         for (SecretFinding f : respFindings) {
-                            boolean isOauthTokenField = "JSON_WALK".equals(f.ruleId()) &&
-                                    OAUTH_TOKEN_KEYS.contains(f.keyName().toLowerCase().replace("_","").replace("-",""));
-                            if (!"JWT_TOKEN_001".equals(f.ruleId()) || isOauthTokenField) {
-                                all.add(f);
-                            }
+                            boolean echoedCallerToken = "JWT_TOKEN_001".equals(f.ruleId())
+                                    && requestJwts.contains(f.matchedValue());
+                            if (!echoedCallerToken) all.add(f);
                         }
                     } else {
                         all.addAll(respFindings);
@@ -267,73 +284,105 @@ public class SecretScanner {
             // omitted here because the dispatcher in scanTextCore is keyed on the response.
             if (!settings.isCustomRulesOnly() && settings.isScanRequestsEnabled()) {
                 List<SecretFinding> reqFindings = new ArrayList<>();
+                // Request-side stages get their own time budget; findings made before it expires are kept.
+                String reqText = request.bodyToString();
+                withBudget(reqText, url, () -> {
 
-                // Pass 1 (named check): flag KNOWN_SECRET_HEADERS + semantic key names
-                // Pass 2 (blob scan): anchored vendor tokens on ALL non-skip headers as a blob
-                StringBuilder hdrBlob = new StringBuilder();
-                for (var hdr : request.headers()) {
-                    String hdrName = hdr.name();
-                    String hdrVal  = hdr.value();
-                    if (hdrVal == null || hdrVal.isBlank()) continue;
-                    String hdrNameLc = hdrName.toLowerCase();
-                    if (SKIP_HEADERS.contains(hdrNameLc)) continue;
+                    // Pass 1 (named check): flag KNOWN_SECRET_HEADERS + semantic key names
+                    // Pass 2 (blob scan): anchored vendor tokens on ALL non-skip headers as a blob
+                    StringBuilder hdrBlob = new StringBuilder();
+                    for (var hdr : request.headers()) {
+                        String hdrName = hdr.name();
+                        String hdrVal  = hdr.value();
+                        if (hdrVal == null || hdrVal.isBlank()) continue;
+                        String hdrNameLc = hdrName.toLowerCase();
+                        // Cookies are not named credentials, but a vendor token stored in a cookie is
+                        if (hdrNameLc.equals("cookie")) {
+                            hdrBlob.append("Cookie: ").append(hdrVal).append("\n");
+                            continue;
+                        }
+                        if (SKIP_HEADERS.contains(hdrNameLc)) continue;
 
-                    // Build blob for pass 2
-                    hdrBlob.append(hdrName).append(": ").append(hdrVal).append("\n");
+                        // Build blob for pass 2
+                        hdrBlob.append(hdrName).append(": ").append(hdrVal).append("\n");
 
-                    // Pass 1: named credential check
-                    boolean isKnown    = KNOWN_SECRET_HEADERS.contains(hdrNameLc);
-                    boolean isSemantic = isSemanticSecretKey(hdrName);
-                    if (!isKnown && !isSemantic) continue;
-                    // CSRF/XSRF tokens are public anti-forgery placeholders — skip
-                    if (isForcedNoiseKey(hdrNameLc)) continue;
+                        // Pass 1: named credential check
+                        boolean isKnown    = KNOWN_SECRET_HEADERS.contains(hdrNameLc);
+                        boolean isSemantic = isSemanticSecretKey(hdrName);
+                        if (!isKnown && !isSemantic) continue;
+                        // CSRF/XSRF tokens are public anti-forgery placeholders — skip
+                        if (isForcedNoiseKey(hdrNameLc)) continue;
 
-                    // Extract credential past the auth scheme ("Bearer ", "Basic ", etc.)
-                    String val = hdrName.equalsIgnoreCase("authorization")
-                            ? stripAuthScheme(hdrVal) : hdrVal.trim();
-                    if (val == null || val.length() < 10 || isPlaceholder(val)) continue;
+                        // Extract credential past the auth scheme ("Bearer ", "Basic ", etc.)
+                        String val = hdrName.equalsIgnoreCase("authorization")
+                                ? stripAuthScheme(hdrVal) : hdrVal.trim();
+                        if (val == null || val.length() < 10 || isPlaceholder(val)) continue;
 
-                    // JWT skip: every authenticated request carries a JWT — not a finding
-                    if (isJwt(val)) continue;
+                        // JWT skip: every authenticated request carries a JWT — not a finding
+                        if (isJwt(val)) continue;
 
-                    // Opaque Bearer suppression: Authorization: Bearer with no known vendor prefix
-                    // is a dynamic session/OAuth token — suppress to avoid per-request noise.
-                    if (hdrName.equalsIgnoreCase("authorization") && isBearerScheme(hdrVal) && !hasBearerVendorPrefix(val)) continue;
+                        // Opaque Bearer suppression: Authorization: Bearer with no known vendor prefix
+                        // is a dynamic session/OAuth token — suppress to avoid per-request noise.
+                        if (hdrName.equalsIgnoreCase("authorization") && isBearerScheme(hdrVal) && !hasBearerVendorPrefix(val)) continue;
 
-                    String display = val.length() > 80 ? val.substring(0, 77) + "..." : val;
-                    String sev     = isKnown ? "HIGH" : scoreSeverity(hdrName, val);
-                    reqFindings.add(SecretFinding.of(
-                            "REQ_HEADER", "Secret in Request Header",
-                            hdrName, val, sev, "CERTAIN",
-                            0, hdrName + ": " + display, url));
-                }
-
-                // Pass 2: vendor-token scan on the full headers blob
-                if (hdrBlob.length() > 0) {
-                    String blobUrl = url + " [req-headers]";
-                    reqFindings.addAll(scanAnchoredTokens(hdrBlob.toString(), blobUrl));
-                    if (settings.getTier() == ScanSettings.ScanTier.FULL) {
-                        reqFindings.addAll(scanHighEntropyValues(hdrBlob.toString(), blobUrl));
+                        String display = val.length() > 80 ? val.substring(0, 77) + "..." : val;
+                        String sev     = isKnown ? "HIGH" : scoreSeverity(hdrName, val);
+                        reqFindings.add(SecretFinding.of(
+                                "REQ_HEADER", "Secret in Request Header",
+                                hdrName, val, sev, "CERTAIN",
+                                0, hdrName + ": " + display, url));
                     }
-                }
 
-                // Request body: anchored tokens + URL creds + (LIGHT+) DB strings
-                // Entropy/KV/JSON walk only at FULL tier — guards against login-form password noise
-                String reqBody = request.bodyToString();
-                if (reqBody != null && !reqBody.isBlank() && reqBody.length() > 20) {
-                    String reqCt = request.headerValue("Content-Type");
-                    reqFindings.addAll(scanAnchoredTokens(reqBody, url + " [req]"));
-                    reqFindings.addAll(scanUrlCredentials(reqBody, url + " [req]"));
-                    if (settings.getTier() != ScanSettings.ScanTier.FAST) {
-                        reqFindings.addAll(scanDbConnectionStrings(reqBody, url + " [req]"));
+                    // Pass 2: vendor-token scan on the full headers blob
+                    if (hdrBlob.length() > 0) {
+                        String blobUrl = url + " [req-headers]";
+                        reqFindings.addAll(scanAnchoredTokens(hdrBlob.toString(), blobUrl));
+                        if (tier() == ScanSettings.ScanTier.FULL) {
+                            reqFindings.addAll(scanHighEntropyValues(hdrBlob.toString(), blobUrl));
+                        }
                     }
-                    if (settings.getTier() == ScanSettings.ScanTier.FULL) {
-                        reqFindings.addAll(scanGenericKV(reqBody, url + " [req]"));
-                        reqFindings.addAll(scanHighEntropyValues(reqBody, url + " [req]"));
-                        boolean reqJson = reqCt != null &&
-                                (reqCt.contains("application/json") || reqCt.contains("+json"));
-                        if (reqJson) reqFindings.addAll(walkJsonBody(reqBody, url + " [req]"));
+
+                    // Request URL: query-string secrets (api_key=, access_token=, password=) and vendor tokens
+                    int q = url.indexOf('?');
+                    if (q >= 0 && q < url.length() - 1) {
+                        String query = url.substring(q + 1).replaceFirst("#.*$", "");
+                        reqFindings.addAll(scanAnchoredTokens(query, url + " [req]"));
+                        reqFindings.addAll(scanUrlCredentials(url, url + " [req]"));
+                        reqFindings.addAll(scanFormPairs(query, url + " [req]"));
                     }
+
+                    // Request body: anchored tokens + URL creds + (LIGHT+) DB strings and context rules
+                    // Entropy/KV/JSON walk only at FULL tier — guards against login-form password noise
+                    String reqBody = request.bodyToString();
+                    if (reqBody != null && !reqBody.isBlank() && reqBody.length() > 20) {
+                        String reqCt = request.headerValue("Content-Type");
+                        if (reqCt != null && reqCt.toLowerCase().contains("x-www-form-urlencoded")) {
+                            reqFindings.addAll(scanFormPairs(reqBody, url + " [req]"));
+                        }
+                        if (tier() != ScanSettings.ScanTier.FAST) {
+                            reqFindings.addAll(scanContextGatedRules(reqBody, url + " [req]"));
+                        }
+                        reqFindings.addAll(scanAnchoredTokens(reqBody, url + " [req]"));
+                        reqFindings.addAll(scanUrlCredentials(reqBody, url + " [req]"));
+                        if (tier() != ScanSettings.ScanTier.FAST) {
+                            reqFindings.addAll(scanDbConnectionStrings(reqBody, url + " [req]"));
+                        }
+                        if (tier() == ScanSettings.ScanTier.FULL) {
+                            reqFindings.addAll(scanGenericKV(reqBody, url + " [req]"));
+                            reqFindings.addAll(scanHighEntropyValues(reqBody, url + " [req]"));
+                            boolean reqJson = reqCt != null &&
+                                    (reqCt.contains("application/json") || reqCt.contains("+json"));
+                            if (reqJson) reqFindings.addAll(walkJsonBody(reqBody, url + " [req]"));
+                        }
+                    }
+
+                    return null;
+                });
+
+                // A password typed into a login form is the tester's own credential, not a leak: LOW
+                if (LOGIN_PATH.matcher(url).find()) {
+                    reqFindings.replaceAll(f -> isPasswordKey(f.keyName()) && f.sourceUrl() != null
+                            && f.sourceUrl().endsWith(" [req]") ? f.withSeverity("LOW") : f);
                 }
 
                 // Filter JWTs + cross-request dedup before adding to findings
@@ -348,12 +397,23 @@ public class SecretScanner {
         }
     }
 
+    /** False for binary media and bodies over {@link ScanSettings#MAX_SCAN_BYTES}. */
+    private static boolean isScannableBody(burp.api.montoya.http.message.responses.HttpResponse response,
+                                           String contentType) {
+        if (ScanSettings.isBinaryMedia(contentType)) return false;
+        try {
+            return response.body() == null || response.body().length() <= ScanSettings.MAX_SCAN_BYTES;
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
+
     /**
      * Scan arbitrary text content. Used both from the passive HTTP handler
      * and from the context-menu rescan path.
      */
     public List<SecretFinding> scanText(String text, String contentType, String url) {
-        return scanTextCore(text, contentType, url, null);
+        return withBudget(text, url, () -> scanTextCore(text, contentType, url, null));
     }
 
     /**
@@ -366,73 +426,146 @@ public class SecretScanner {
      */
     public List<SecretFinding> scanTextDebug(String text, String contentType, String url,
                                               List<DebugEntry> dbg) {
-        return scanTextCore(text, contentType, url, dbg);
+        return withBudget(text, url, () -> scanTextCore(text, contentType, url, dbg));
+    }
+
+    /**
+     * Same as {@link #scanTextDebug} at an explicit tier, without changing the shared settings
+     * (Bulk Scan's tier selector must not switch the proxy and passive scanners' tier).
+     */
+    public List<SecretFinding> scanTextDebug(String text, String contentType, String url,
+                                             List<DebugEntry> dbg, ScanSettings.ScanTier tier) {
+        ScanSettings.ScanTier previous = TIER_OVERRIDE.get();
+        TIER_OVERRIDE.set(tier);
+        try {
+            return scanTextDebug(text, contentType, url, dbg);
+        } finally {
+            if (previous == null) TIER_OVERRIDE.remove(); else TIER_OVERRIDE.set(previous);
+        }
+    }
+
+    private static final ThreadLocal<ScanSettings.ScanTier> TIER_OVERRIDE = new ThreadLocal<>();
+
+    /** Tier for the current scan: a per-call override (Bulk Scan) or the shared setting. */
+    private ScanSettings.ScanTier tier() {
+        ScanSettings.ScanTier t = TIER_OVERRIDE.get();
+        return t != null ? t : settings.getTier();
+    }
+
+    // -------------------------------------------------------------------------
+    // Scan time budget
+    // -------------------------------------------------------------------------
+    // java.util.regex has no timeout. Every matcher over response text reads it through
+    // budgeted(), which aborts the match once this thread's deadline passes, so one hostile
+    // response cannot pin a proxy or scanner thread. Each scan level keeps what it found
+    // before the deadline.
+
+    private static final ThreadLocal<long[]> SCAN_DEADLINE = new ThreadLocal<>();
+    private static final ThreadLocal<boolean[]> BUDGET_HIT = ThreadLocal.withInitial(() -> new boolean[1]);
+
+    /**
+     * Time allowed for one response: 30 s plus 10 s per million characters. This is a backstop
+     * against runaway matching, not a performance target: normal scans finish far inside it,
+     * including slow but legitimate ones such as hundreds of custom rules on a large bundle.
+     */
+    static long budgetMillis(int chars) {
+        return 30_000L + 10L * chars / 1_000;
+    }
+
+    /** Matcher input that respects the current scan deadline (unchanged when none is set). */
+    static CharSequence budgeted(CharSequence s) {
+        long[] d = SCAN_DEADLINE.get();
+        return d == null || s == null ? s : com.secretscanner.rules.DeadlineCharSequence.until(s, d[0]);
+    }
+
+    private <T> T withBudget(String text, String url, java.util.function.Supplier<T> scan) {
+        return withBudget(text, url, scan, null);
+    }
+
+    /** Runs {@code scan} under a deadline sized for {@code text}; returns {@code onTimeout} if it expires. */
+    private <T> T withBudget(String text, String url, java.util.function.Supplier<T> scan, T onTimeout) {
+        if (SCAN_DEADLINE.get() != null) return scan.get();          // nested call: share the outer budget
+        int chars = text == null ? 0 : text.length();
+        SCAN_DEADLINE.set(new long[]{System.nanoTime() + budgetMillis(chars) * 1_000_000L});
+        BUDGET_HIT.get()[0] = false;
+        try {
+            return scan.get();
+        } catch (com.secretscanner.rules.DeadlineCharSequence.RegexTimeoutException e) {
+            BUDGET_HIT.get()[0] = true;
+            return onTimeout;
+        } finally {
+            SCAN_DEADLINE.remove();
+            LINE_INDEX.remove();
+            if (BUDGET_HIT.get()[0] && logging != null) {
+                String where = url == null ? "" : url.replaceFirst("[?#].*", "");
+                logging.logToError("SecretSifter: scan time budget exceeded for " + where
+                        + " (" + chars + " chars); partial results kept");
+            }
+        }
     }
 
     /** Core scan implementation — {@code dbg} may be null (no suppression logging). */
     private List<SecretFinding> scanTextCore(String text, String contentType, String url,
                                               List<DebugEntry> dbg) {
         if (text == null || text.isBlank()) return List.of();
+        List<SecretFinding> all = new ArrayList<>();
+        try {
+            return scanTextStages(text, contentType, url, dbg, all);
+        } catch (com.secretscanner.rules.DeadlineCharSequence.RegexTimeoutException e) {
+            BUDGET_HIT.get()[0] = true;
+            return filterAndDeduplicate(all, dbg);
+        }
+    }
+
+    private List<SecretFinding> scanTextStages(String text, String contentType, String url,
+                                               List<DebugEntry> dbg, List<SecretFinding> all) {
         String ct   = contentType != null ? contentType.toLowerCase() : "";
-        boolean isJson = ct.contains("application/json") || ct.contains("+json");
+        if (url == null) url = "";
+        // URL path without query, fragment or the " [JS]" style labels the bulk scanner appends
+        String path = url.toLowerCase().replaceFirst(" \\[[^\\]]*\\]$", "").replaceFirst("[?#].*$", "");
+        boolean isJson = ct.contains("application/json") || ct.contains("+json") || ct.contains("text/json");
         boolean isHtml = ct.contains("text/html") || ct.contains("application/xhtml");
         boolean isXml  = ct.contains("text/xml")  || ct.contains("application/xml") || ct.contains("+xml");
         boolean isJs   = ct.contains("javascript") || ct.contains("ecmascript") ||
-                         url.toLowerCase().endsWith(".js") || url.toLowerCase().endsWith(".mjs") ||
-                         url.toLowerCase().endsWith(".jsx") || url.toLowerCase().endsWith(".ts") ||
-                         url.toLowerCase().endsWith(".tsx");
+                         path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs") ||
+                         path.endsWith(".jsx") || path.endsWith(".ts") || path.endsWith(".tsx");
+        // A JSON body served with the wrong type (text/html, text/plain, none) is still JSON
+        if (!isJson && !isJs && (isHtml || ct.isEmpty() || ct.contains("text/plain"))) {
+            String head = text.stripLeading();
+            if (head.startsWith(")]}'")) head = head.substring(4).stripLeading();
+            if ((head.startsWith("{") || head.startsWith("[")) && !head.regionMatches(true, 0, "<!doctype", 0, 9)) {
+                isJson = true;
+                isHtml = false;
+            }
+        }
+        // .env / YAML / properties / INI style responses: unquoted key = value lines
+        boolean isConfigText = !isJs && !isJson && !isHtml && (ct.contains("yaml") || ct.contains("x-properties")
+                || ct.contains("toml") || CONFIG_PATH.matcher(path).find()
+                || ((ct.isEmpty() || ct.contains("text/plain")) && looksLikeConfigText(text)));
         // OAuth 2.0 token endpoints (e.g. /oauth/token, /enterprise.operations.authorization)
         // may return responses as application/x-www-form-urlencoded instead of JSON.
         boolean isFormEncoded = ct.contains("application/x-www-form-urlencoded");
-        ScanSettings.ScanTier tier = settings.getTier();
-
-        List<SecretFinding> all = new ArrayList<>();
+        ScanSettings.ScanTier tier = tier();
 
         // --- Form-encoded pre-pass: parse key=value pairs ---
         // Handles OAuth 2.0 token responses like:
         //   access_token=eyJ...&token_type=Bearer&expires_in=3600&resource=<uuid>
         if (isFormEncoded) {
-            for (String param : text.split("&")) {
-                int eq = param.indexOf('=');
-                if (eq <= 0) continue;
-                String key;
-                String val;
-                try {
-                    key = java.net.URLDecoder.decode(param.substring(0, eq).trim(),
-                            java.nio.charset.StandardCharsets.UTF_8);
-                    val = java.net.URLDecoder.decode(param.substring(eq + 1).trim(),
-                            java.nio.charset.StandardCharsets.UTF_8);
-                } catch (Exception ignored) {
-                    key = param.substring(0, eq).trim();
-                    val = param.substring(eq + 1).trim();
-                }
-                if (key.isBlank() || val.isBlank() || val.length() < 8) continue;
-                if (!isSemanticSecretKey(key) && !isApiOverrideKey(key)) continue;
-                if (!isProbableSecretValue(val)) continue;
-                String sev  = scoreSeverity(key, val);
-                String conf = hasHighEntropy(val) ? "CERTAIN" : "FIRM";
-                all.add(SecretFinding.of("GENERIC_KV", "Secret in Key-Value Pair",
-                        key, val, sev, conf, 1,
-                        key + "=" + (val.length() > 50 ? val.substring(0, 50) + "…" : val), url));
-            }
+            all.addAll(scanFormPairs(text, url));
         }
 
         // --- HTML pre-pass: extract and scan inline <script> blocks ---
         // This catches secrets embedded directly in HTML pages (SPAs especially)
         if (isHtml) {
             // 1. Inline <script> blocks (no src attribute) — JS config, bootstrappers, etc.
-            Matcher sm = Patterns.INLINE_SCRIPT.matcher(text);
-            while (sm.find()) {
-                String block = sm.group(1);
+            for (String block : com.secretscanner.core.ScriptBlocks.inline(text)) {
                 if (block != null && !block.isBlank() && block.length() > 20) {
                     // Recurse with JS content type — avoids re-triggering HTML path
                     all.addAll(scanTextCore(block, "application/javascript", url + "#inline-js", dbg));
                 }
             }
             // 2. <script type="application/json"> blocks — Next.js __NEXT_DATA__ etc.
-            Matcher jm = Patterns.JSON_SCRIPT_TAG.matcher(text);
-            while (jm.find()) {
-                String block = jm.group(1);
+            for (String block : com.secretscanner.core.ScriptBlocks.json(text)) {
                 if (block != null && !block.isBlank() && block.length() > 20) {
                     all.addAll(scanTextCore(block.trim(), "application/json", url + "#json-script", dbg));
                 }
@@ -471,9 +604,10 @@ public class SecretScanner {
                 if (credential == null || credential.length() < 10 || isPlaceholder(credential)) continue;
                 // JWT skip: Bearer tokens in every request are not findings
                 if (isJwt(credential)) continue;
-                // Reject non-secret values: all-alpha company/org names (e.g. "BackblazeInc"),
-                // version strings, and other identifiers that carry no credential risk.
-                if (!isProbableSecretValue(credential)) continue;
+                // Reject non-secret values for headers that are only semantically named (all-alpha
+                // org names, version strings). Known secret headers (x-api-key, authorization,
+                // ocp-apim-subscription-key ...) are reported as the proxy path reports them.
+                if (!isKnown && !isProbableSecretValue(credential)) continue;
                 // Opaque Bearer suppression (same logic as scanRequestResponse Pass 1)
                 if (name.equalsIgnoreCase("authorization") && isBearerScheme(val) && !hasBearerVendorPrefix(credential)) continue;
                 String display = credential.length() > 80 ? credential.substring(0, 77) + "..." : credential;
@@ -485,7 +619,7 @@ public class SecretScanner {
             }
             // Do NOT call filterRequestFindings() here — that method adds values to the
             // shared seenRequestValues set, which would silently suppress the same credentials
-            // from being reported later by the passive scan check (scanRequestResponse path).
+            // from being reported later by the proxy handler (scanRequestResponse path).
             // Bulk Scan is a one-shot operation; it doesn't need cross-request dedup.
             // JWT filter is already applied inline above; just add directly.
             all.addAll(hdrFindings);
@@ -519,7 +653,7 @@ public class SecretScanner {
 
         // --- Phase 3: DB connection strings + context-gated rules (LIGHT + FULL) ---
         all.addAll(scanDbConnectionStrings(text, url));
-        all.addAll(scanContextGatedRules(text, url));
+        all.addAll(scanContextGatedRules(text, url, dbg));
 
         if (tier == ScanSettings.ScanTier.LIGHT) {
             return filterAndDeduplicate(all, dbg);
@@ -532,9 +666,18 @@ public class SecretScanner {
         // For HTML, scanGenericKV was already applied to each inline <script> block above.
         // Running it again on the full HTML text would double-report the same findings at
         // different (absolute vs block-relative) line numbers once line-number dedup is in use.
+        all.addAll(scanEscapedKV(text, url, dbg));
+        if (isJs || isHtml) all.addAll(scanConcatenatedStrings(text, url));
         if (!isHtml) {
             all.addAll(scanGenericKV(text, url, dbg));
             all.addAll(scanComputedPropObjects(text, url));
+        } else {
+            // HTML outside <script> blocks (already scanned above): data-* attributes, inline
+            // JSON in attributes, meta tags. Script bodies are blanked so offsets stay true.
+            all.addAll(scanGenericKV(blankScriptBodies(text), url, dbg));
+        }
+        if (isConfigText) {
+            all.addAll(scanUnquotedAssignments(text, url, dbg));
         }
         all.addAll(scanSsrStateBlobs(text, url));
         all.addAll(scanBase64Blobs(text, url));
@@ -561,6 +704,153 @@ public class SecretScanner {
         return filterAndDeduplicate(all, dbg);
     }
 
+    /** Decodes \\/ and \\uXXXX escapes so a JS/JSON string value is reported as its runtime value. */
+    static String unescapeJs(String v) {
+        if (v == null || v.indexOf('\\') < 0) return v;
+        StringBuilder sb = new StringBuilder(v.length());
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (c == '\\' && i + 1 < v.length()) {
+                char n = v.charAt(i + 1);
+                if (n == '/' ) { sb.append('/'); i++; continue; }
+                if (n == 'u' && i + 5 < v.length() && v.substring(i + 2, i + 6).matches("[0-9A-Fa-f]{4}")) {
+                    sb.append((char) Integer.parseInt(v.substring(i + 2, i + 6), 16)); i += 5; continue;
+                }
+            }
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    /** &lt;tag&gt;&lt;![CDATA[value]]&gt;&lt;/tag&gt; → &lt;tag&gt;value&lt;/tag&gt; so XML leaves see the value. */
+    private static String unwrapCdata(String xml) {
+        if (!xml.contains("<![CDATA[")) return xml;
+        StringBuilder sb = new StringBuilder(xml.length());
+        int from = 0;
+        while (true) {
+            int a = xml.indexOf("<![CDATA[", from);
+            if (a < 0) break;
+            int b = xml.indexOf("]]>", a + 9);
+            if (b < 0) break;
+            sb.append(xml, from, a).append(xml, a + 9, b);
+            from = b + 3;
+        }
+        return sb.append(xml.substring(from)).toString();
+    }
+
+    private static final Pattern LOGIN_PATH = Pattern.compile("(?i)/(?:[a-z0-9_-]*/)*(?:log-?in|sign-?in|auth(?:enticate)?|session|token|oauth2?)(?:[/?#]|$)");
+
+    private static final Pattern AUTH_SCHEME_VALUE = Pattern.compile("(?i)(?:bearer|token|basic|apikey|api-key|sso-key)\\s+(\\S{10,})");
+    private static final Pattern SEMVER = Pattern.compile("v?\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.+\\-]*)?");
+    private static final Pattern HASH_FINGERPRINT = Pattern.compile("(?i)(?:sha(?:1|224|256|384|512)|md5)[:=-][0-9a-f]{8,}");
+
+    /** key=value&amp;... pairs (form-encoded bodies, query strings) through the key/value gates. */
+    private List<SecretFinding> scanFormPairs(String text, String url) {
+        List<SecretFinding> out = new ArrayList<>();
+        for (String param : text.split("&")) {
+            int eq = param.indexOf('=');
+            if (eq <= 0) continue;
+            String key;
+            String val;
+            try {
+                key = java.net.URLDecoder.decode(param.substring(0, eq).trim(), StandardCharsets.UTF_8);
+                val = java.net.URLDecoder.decode(param.substring(eq + 1).trim(), StandardCharsets.UTF_8);
+            } catch (Exception ignored) {
+                key = param.substring(0, eq).trim();
+                val = param.substring(eq + 1).trim();
+            }
+            if (key.isBlank() || val.isBlank() || val.length() < 8) continue;
+            if (isForcedNoiseKey(key)) continue;
+            if (!isSemanticSecretKey(key) && !isApiOverrideKey(key)) continue;
+            boolean ok = isPasswordKey(key) ? isPlausiblePassword(val) : isProbableSecretValue(val);
+            if (!ok || isPlaceholder(val)) continue;
+            String sev  = scoreSeverity(key, val);
+            String conf = hasHighEntropy(val) ? "CERTAIN" : "FIRM";
+            out.add(SecretFinding.of("GENERIC_KV", "Secret in Key-Value Pair",
+                    key, val, sev, conf, 1,
+                    key + "=" + (val.length() > 50 ? val.substring(0, 50) + "…" : val), url));
+        }
+        return out;
+    }
+
+    // =========================================================================
+    // Config-text and HTML helpers
+    // =========================================================================
+
+    private static final Pattern CONFIG_PATH = Pattern.compile(
+            "(?:^|/)\\.env(?:\\.[a-z0-9_-]+)?$|\\.(?:ya?ml|properties|ini|cfg|conf|toml|env)$|(?:^|/)(?:\\.npmrc|\\.pypirc|\\.netrc|\\.git-credentials|credentials)$");
+
+    /** KEY=value or key: value assignment line, value unquoted (quoted values are GENERIC_KV's job). */
+    private static final Pattern UNQUOTED_ASSIGN = Pattern.compile(
+            "(?m)^[ \\t]*(?:export[ \\t]+)?([A-Za-z_][A-Za-z0-9_.\\-]{1,80})[ \\t]*[:=][ \\t]*([^\\s#'\"][^\\r\\n]{3,500}?)[ \\t]*(?:[ \\t]#.*)?$");
+
+    /** Two or more KEY=value lines and no markup: a dotenv / properties body served as text/plain. */
+    private static boolean looksLikeConfigText(String text) {
+        if (text.length() > 2_000_000 || text.contains("<html") || text.contains("function(")) return false;
+        int hits = 0;
+        Matcher m = UNQUOTED_ASSIGN.matcher(text.length() > 20_000 ? text.substring(0, 20_000) : text);
+        while (m.find() && hits < 2) hits++;
+        return hits >= 2;
+    }
+
+    /** The HTML with every inline &lt;script&gt; body replaced by spaces (same length, same offsets). */
+    private static String blankScriptBodies(String html) {
+        StringBuilder sb = new StringBuilder(html);
+        int from = 0;
+        while (true) {
+            int open = com.secretscanner.core.ScriptBlocks.indexOfScriptOpen(html, from);
+            if (open < 0) break;
+            int gt = html.indexOf('>', open);
+            if (gt < 0) break;
+            int close = com.secretscanner.core.ScriptBlocks.indexOfScriptClose(html, gt + 1);
+            if (close < 0) break;
+            for (int i = gt + 1; i < close; i++) if (sb.charAt(i) != '\n') sb.setCharAt(i, ' ');
+            from = close + 9;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Unquoted assignments in config-style responses (.env, YAML, .properties, INI): the same key
+     * and value gates as GENERIC_KV, applied to KEY=value / key: value lines.
+     */
+    private List<SecretFinding> scanUnquotedAssignments(String text, String url, List<DebugEntry> dbg) {
+        List<SecretFinding> findings = new ArrayList<>();
+        Matcher m = UNQUOTED_ASSIGN.matcher(budgeted(text));
+        while (m.find()) {
+            String key = m.group(1);
+            String val = m.group(2).strip();
+            if (val.endsWith(",") || val.endsWith(";")) val = val.substring(0, val.length() - 1).strip();
+            if (val.isEmpty() || val.contains(" ") && !isPasswordKey(key)) continue;
+            if (isForcedNoiseKey(key) || Patterns.NOISE_KEYNAMES.matcher(key).matches()) continue;
+            String leaf = key.contains(".") ? key.substring(key.lastIndexOf('.') + 1) : key;
+            boolean semantic = isSemanticSecretKey(key) || isSemanticSecretKey(leaf) || isApiOverrideKey(key)
+                    || keyEndsInSecretWord(leaf) || settings.isKeyAllowlisted(key);
+            if (!semantic) continue;
+            if (isPlaceholder(val) || TEMPLATE_IN_VALUE.matcher(val).find() || val.startsWith("$")) {
+                dbgAdd(dbg, new DebugEntry("CONFIG_KV", key, dbgVal(val), "placeholder", url));
+                continue;
+            }
+            boolean pwKey = isPasswordKey(key) || isPasswordKey(leaf);
+            boolean ok = pwKey ? isPlausiblePassword(val) : isProbableSecretValue(val);
+            if (!ok && isJwt(val)) ok = true;
+            if (!ok) {
+                dbgAdd(dbg, new DebugEntry("CONFIG_KV", key, dbgVal(val),
+                        pwKey ? "implausible_password" : "not_probable_secret_value", url));
+                continue;
+            }
+            if (isPublicByDesign(key, val)) {
+                dbgAdd(dbg, new DebugEntry("CONFIG_KV", key, dbgVal(val), "public_by_design", url));
+                continue;
+            }
+            findings.add(SecretFinding.of(
+                    "CONFIG_KV", "Secret in Config File", key, val,
+                    atLeastMedium(scoreSeverity(leaf, val)), hasHighEntropy(val) ? "CERTAIN" : "FIRM",
+                    countLines(text, m.start(2)), extractContext(text, m.start(), m.end()), url, m.start(2)));
+        }
+        return findings;
+    }
+
     // =========================================================================
     // Scan methods
     // =========================================================================
@@ -575,72 +865,20 @@ public class SecretScanner {
         List<SecretFinding> findings = new ArrayList<>();
         Set<String> seen = new HashSet<>();
 
-        for (Patterns.AnchoredRule rule : Patterns.ANCHORED_RULES) {
-            Matcher m = rule.pattern().matcher(text);
+        // One Aho-Corasick pass finds which rules' keywords occur; rules whose keywords are
+        // absent cannot match and are skipped (keywords are literals every match must contain).
+        BitSet candidates = Patterns.ANCHORED_PREFILTER.candidates(text);
+        for (int ri = 0; ri < Patterns.ANCHORED_RULES.size(); ri++) {
+            if (!candidates.get(ri)) continue;
+            Patterns.AnchoredRule rule = Patterns.ANCHORED_RULES.get(ri);
+            Matcher m = rule.pattern().matcher(budgeted(text));
             while (m.find()) {
                 String val = m.group(0).trim();
-                // Skip obvious placeholders
-                if (isPlaceholder(val)) {
-                    dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "placeholder", url));
+                String reject = anchoredRejection(rule.ruleId(), val,
+                        text.substring(Math.max(0, m.start() - 60), m.start()));
+                if (reject != null) {
+                    dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), reject, url));
                     continue;
-                }
-                // DISCORD_TOKEN_001 FP guard: real Discord bot tokens are base64url-encoded
-                // in all three segments — each segment must contain at least one digit.
-                // JS dotted property chains (e.g. "actions_1.default.fetchSuccess") match
-                // the structural 28.7.27 pattern but their middle segment ("default",
-                // "prototype", etc.) is a plain English word with no digits.
-                if ("DISCORD_TOKEN_001".equals(rule.ruleId())) {
-                    int d1 = val.indexOf('.');
-                    int d2 = d1 >= 0 ? val.indexOf('.', d1 + 1) : -1;
-                    if (d1 > 0 && d2 > d1) {
-                        String seg2 = val.substring(d1 + 1, d2);
-                        String seg3 = val.substring(d2 + 1);
-                        if (seg2.chars().noneMatch(Character::isDigit)
-                                || seg3.chars().noneMatch(Character::isDigit)) {
-                            dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "discord_non_numeric_segment", url));
-                            continue;
-                        }
-                    }
-                }
-                // ALGOLIA_KEY_001 FP guard: the pattern uses (?i) so its 10-char [A-Z0-9] capture
-                // group also matches lowercase.  Real Algolia App IDs are UPPERCASE alphanumeric
-                // (e.g. JRFR1I7G8S).  PascalCase / camelCase JS variable names (e.g. TbBrandAlg,
-                // from react-icons' TbBrandAlgolia component) are false positives.
-                if ("ALGOLIA_KEY_001".equals(rule.ruleId())) {
-                    if (!val.equals(val.toUpperCase())) {
-                        dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "algolia_lowercase_guard", url));
-                        continue;
-                    }
-                }
-                // AZURE_CONN_001 FP guard: Azurite (Azure Storage Emulator) ships with a
-                // well-known, universally-identical dev credential published in Microsoft docs.
-                // AccountName=devstoreaccount1 is the canonical indicator.  Never a real secret.
-                if ("AZURE_CONN_001".equals(rule.ruleId())) {
-                    if (val.toLowerCase().contains("devstoreaccount1")) {
-                        dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "azure_emulator_credential", url));
-                        continue;
-                    }
-                }
-                // GUID_TOKEN_001 FP guard: Adobe Target "propertyToken" and similar
-                // platform-config UUIDs are public deployment identifiers — not secrets.
-                // Signal: key group contains "property" before "token".
-                if ("GUID_TOKEN_001".equals(rule.ruleId())) {
-                    String keyGrp = m.groupCount() >= 1 ? m.group(1) : "";
-                    if (keyGrp != null && keyGrp.toLowerCase().contains("property")) {
-                        dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "guid_property_token", url));
-                        continue;
-                    }
-                }
-                // JWT_TOKEN_001 FP guard: Netlify RUM / Core Web Vitals tokens are server-rendered
-                // per-request analytics tokens embedded as data-netlify-cwv-token attributes.
-                // They are short-lived, scope-limited to telemetry, and not extractable secrets.
-                // Signal: "netlify" appears within 60 chars before the match.
-                if ("JWT_TOKEN_001".equals(rule.ruleId())) {
-                    String pre60 = text.substring(Math.max(0, m.start() - 60), m.start());
-                    if (pre60.toLowerCase().contains("netlify")) {
-                        dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "jwt_netlify_analytics_token", url));
-                        continue;
-                    }
                 }
                 String dedupe = rule.ruleId() + ":" + val;
                 if (!seen.add(dedupe)) continue;
@@ -654,17 +892,48 @@ public class SecretScanner {
         return findings;
     }
 
+    /**
+     * Why an anchored-rule match is not a secret, or null. Shared by the text scan and the JSON
+     * walker so both apply the same guards. {@code before} = up to 60 chars preceding the match
+     * (the JSON path when walking JSON).
+     */
+    private static String anchoredRejection(String ruleId, String val, String before) {
+        if (isPlaceholder(val)) return "placeholder";
+        switch (ruleId) {
+            case "DISCORD_TOKEN_001": {
+                // real bot tokens are base64url in all three segments, each with a digit; JS dotted
+                // property chains (actions_1.default.fetchSuccess) have a plain word in the middle
+                int d1 = val.indexOf('.');
+                int d2 = d1 >= 0 ? val.indexOf('.', d1 + 1) : -1;
+                if (d1 > 0 && d2 > d1 && (val.substring(d1 + 1, d2).chars().noneMatch(Character::isDigit)
+                        || val.substring(d2 + 1).chars().noneMatch(Character::isDigit)))
+                    return "discord_non_numeric_segment";
+                return null;
+            }
+            case "AZURE_CONN_001":
+                // Azurite (storage emulator) ships one published dev credential: devstoreaccount1
+                return val.toLowerCase().contains("devstoreaccount1") ? "azure_emulator_credential" : null;
+            case "JWT_TOKEN_001":
+                // Netlify RUM / Core Web Vitals per-request telemetry tokens (data-netlify-cwv-token)
+                return before != null && before.toLowerCase().contains("netlify") ? "jwt_netlify_analytics_token" : null;
+            default:
+                return null;
+        }
+    }
+
     /** Detect https://user:pass@host and https://host?password=X URL credential patterns. */
     private List<SecretFinding> scanUrlCredentials(String text, String url) {
         List<SecretFinding> findings = new ArrayList<>();
 
         // Basic-auth style: https://user:pass@host
-        Matcher m = Patterns.URL_WITH_CREDS.matcher(text);
+        Matcher m = Patterns.URL_WITH_CREDS.matcher(budgeted(text));
         while (m.find()) {
+            String user = m.group(1);
             String pass = m.group(2);
             String host = m.group(3);
             if (pass == null || pass.length() < 4) continue;
-            if (pass.equalsIgnoreCase("password") || pass.equalsIgnoreCase("secret")) continue;
+            if (pass.equalsIgnoreCase("password") || pass.equalsIgnoreCase("secret") || pass.equalsIgnoreCase("pass")) continue;
+            if (isPlaceholder(pass) || pass.equals(user) || pass.chars().distinct().count() == 1) continue;
             if (isExternalCdn("https://" + host)) continue;
             String ctx = extractContext(text, m.start(), m.end());
             findings.add(SecretFinding.of(
@@ -674,7 +943,7 @@ public class SecretScanner {
         }
 
         // Query-parameter style: https://host/path?username=X&password=Y
-        Matcher qm = Patterns.URL_QUERY_CREDS.matcher(text);
+        Matcher qm = Patterns.URL_QUERY_CREDS.matcher(budgeted(text));
         while (qm.find()) {
             String pass = qm.group(1);
             if (pass == null || pass.length() < 4) continue;
@@ -686,9 +955,24 @@ public class SecretScanner {
                     countLines(text, qm.start()), ctx, url));
         }
 
+        // API keys, tokens and client secrets passed as query parameters (relative or absolute URLs,
+        // sitemap/XML comments, HTML attributes, JS strings).
+        Matcher sqm = Patterns.URL_QUERY_SECRET.matcher(budgeted(text));
+        while (sqm.find()) {
+            String key = sqm.group(1);
+            String val = sqm.group(2);
+            if (isPlaceholder(val) || isJwt(val) || TEMPLATE_IN_VALUE.matcher(val).find()) continue;
+            if (!isProbableSecretValue(val) && !hasHighEntropy(val)) continue;
+            String ctx = extractContext(text, sqm.start(), sqm.end());
+            findings.add(SecretFinding.of(
+                    "URL_QUERY_SECRET", "Secret in URL Query Parameter",
+                    key, val, atLeastMedium(scoreSeverity(key, val)), "FIRM",
+                    countLines(text, sqm.start()), ctx, url));
+        }
+
         // Relative-URL / HTML-attribute query credentials — no https:// prefix required.
         // Catches <frame src="path?password=X">, &amp;-separated params in HTML attributes, etc.
-        Matcher bqm = Patterns.BARE_QUERY_CREDS.matcher(text);
+        Matcher bqm = Patterns.BARE_QUERY_CREDS.matcher(budgeted(text));
         while (bqm.find()) {
             String pass = bqm.group(1);
             if (isPlaceholder(pass)) continue;
@@ -702,14 +986,19 @@ public class SecretScanner {
         return findings;
     }
 
+    private static final Pattern TEMPLATE_IN_VALUE = Pattern.compile("\\$\\{|\\{\\{|%7B|<%|\\+\\s*[A-Za-z_$]");
+
     /** Detect DB/broker connection strings with embedded credentials. */
     private List<SecretFinding> scanDbConnectionStrings(String text, String url) {
         List<SecretFinding> findings = new ArrayList<>();
-        Matcher m = Patterns.DB_CONN_STRING.matcher(text);
+        Matcher m = Patterns.DB_CONN_STRING.matcher(budgeted(text));
         while (m.find()) {
+            String user = m.group(2);
             String pass = m.group(3);
             if (pass == null || pass.length() < 4) continue;
-            if (isPlaceholder(pass)) continue;
+            if (isPlaceholder(pass) || pass.equals(user)) continue;
+            // host:port/path@x is not a credential (ftp://files.example.com:21/pub@mirror)
+            if (user != null && user.contains(".") && pass.matches("\\d{1,5}(/.*)?")) continue;
             String scheme = m.group(1);
             String ctx    = extractContext(text, m.start(), m.end());
             findings.add(SecretFinding.of(
@@ -722,9 +1011,9 @@ public class SecretScanner {
         // semicolon-delimited key=value format rather than URL scheme (e.g.
         // "Data Source=host;Initial Catalog=db;Password=secret").
         Set<String> seenDotnet = new HashSet<>();
-        Matcher m2 = Patterns.DOTNET_CONN_STR.matcher(text);
+        Matcher m2 = Patterns.DOTNET_CONN_STR.matcher(budgeted(text));
         while (m2.find()) {
-            String pass = m2.group(1);
+            String pass = unbrace(m2.group(1));
             if (pass == null || pass.length() < 4) continue;
             if (isPlaceholder(pass)) continue;
             // Reject JS arithmetic expressions: obfuscated JS uses short variable names
@@ -740,7 +1029,26 @@ public class SecretScanner {
                     "db_password", pass, "HIGH", "CERTAIN",
                     countLines(text, m2.start()), ctx, url));
         }
+        // Password-first ADO.NET strings ("Password=x;Server=...;User ID=...")
+        Matcher m3 = Patterns.DOTNET_CONN_PWD_FIRST.matcher(budgeted(text));
+        while (m3.find()) {
+            String pass = unbrace(m3.group(1));
+            if (pass == null || pass.length() < 4 || isPlaceholder(pass)) continue;
+            if (!seenDotnet.add(pass)) continue;
+            findings.add(SecretFinding.of(
+                    "DB_CONN_DOTNET", "ADO.NET/SQL Server Connection String",
+                    "db_password", pass, "HIGH", "CERTAIN",
+                    countLines(text, m3.start()), extractContext(text, m3.start(), m3.end()), url));
+        }
         return findings;
+    }
+
+    /** ADO.NET quotes values containing ';' as {value}; also trims surrounding whitespace. */
+    private static String unbrace(String v) {
+        if (v == null) return null;
+        String t = v.strip();
+        if (t.length() >= 2 && t.startsWith("{") && t.endsWith("}")) t = t.substring(1, t.length() - 1);
+        return t;
     }
 
     /**
@@ -755,11 +1063,11 @@ public class SecretScanner {
     private List<SecretFinding> scanGenericKV(String text, String url, List<DebugEntry> dbg) {
         List<SecretFinding> findings = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        Matcher m = Patterns.GENERIC_KV.matcher(text);
+        Matcher m = Patterns.GENERIC_KV.matcher(budgeted(text));
         while (m.find()) {
-            // GENERIC_KV has 3 groups: 1=quoted-key (may have spaces), 2=unquoted-key, 3=value
+            // GENERIC_KV groups: 1=quoted-key (may have spaces), 2=unquoted-key, 3=quote, 4=value
             String key = m.group(1) != null ? m.group(1).trim() : m.group(2);
-            String val = m.group(3);
+            String val = m.group(4);
             if (key == null || val == null) continue;
             // FP fix [4a]: skip Angular/Vue/Alpine directive attributes (ng-keyup, v-on:click, etc.)
             if (isFrameworkAttributeKey(key)) continue;
@@ -775,6 +1083,29 @@ public class SecretScanner {
             if (!forceInclude && !isSemanticSecretKey(key) && !apiOverride) continue;
 
             String trimmedVal = val.trim();
+            // Authorization-style values carry a scheme: judge (and report) the credential itself
+            if (key.toLowerCase().contains("authorization") || key.equalsIgnoreCase("auth")) {
+                Matcher am = AUTH_SCHEME_VALUE.matcher(trimmedVal);
+                if (am.matches()) { trimmedVal = am.group(1); val = trimmedVal; }
+            }
+            // Version strings (2.14.3-rc.12, 1.0.0-beta.2+exp.sha.5114f85) and SHA256:/sha1: fingerprints
+            if (SEMVER.matcher(trimmedVal).matches() || HASH_FINGERPRINT.matcher(trimmedVal).matches()) {
+                dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "version_or_fingerprint", url));
+                continue;
+            }
+            // A literal that is one operand of + ("__reactResources$" + randomKey) is a prefix or
+            // suffix of a computed string, not the runtime value. Secrets split across several
+            // literals are found by scanConcatenatedStrings, which folds the literals first.
+            if (isConcatOperand(text, m.start(4) - 1, m.end())) {
+                dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "js_concat_operand", url));
+                continue;
+            }
+            // Word-shaped identifiers (__reactResources$, internalHoistableMarker) at any length;
+            // passwords are judged by isPlausiblePassword instead.
+            if (!forceInclude && !isPasswordKey(key) && isIdentifierLike(trimmedVal)) {
+                dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "identifier_like_value", url));
+                continue;
+            }
             // Reject JS string-concatenation fragments: a value that starts or ends with '+' is
             // an adjacent operand in a JS string-build expression, not a hardcoded credential.
             // e.g. "+t.userUniqId+" from "...&userUniqId="+t.userUniqId+"..."
@@ -808,22 +1139,25 @@ public class SecretScanner {
                 }
             } else if (apiOverride && trimmedVal.length() >= 8 && trimmedVal.length() < 12) {
                 // Relaxed minimum length for high-confidence API key names (e.g. inviteApiKey:"px34udyy99")
-                if (trimmedVal.matches("[A-Za-z_]+") || trimmedVal.matches("[A-Za-z_][A-Za-z0-9_]*")) {
-                    dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "not_probable_secret_value", url));
-                    continue;  // still reject pure-alpha identifiers
+                if (trimmedVal.matches("[A-Za-z_]+") || isIdentifierLike(trimmedVal)) {
+                    dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "short_value_identifier_like", url));
+                    continue;  // still reject word-shaped identifiers
                 }
                 // Reject values with internal whitespace — UI phrases/labels like "Secret key:", not credentials
                 if (trimmedVal.chars().anyMatch(Character::isWhitespace)) {
-                    dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "not_probable_secret_value", url));
+                    dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "short_value_has_whitespace", url));
                     continue;
                 }
                 String sym = "~`!@#$%^&*+=|?.:,;";
                 boolean hasDigitOrSym = trimmedVal.chars().anyMatch(Character::isDigit)
                         || trimmedVal.chars().anyMatch(c -> sym.indexOf(c) >= 0);
                 if (!hasDigitOrSym) {
-                    dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "not_probable_secret_value", url));
+                    dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "short_value_no_digit_or_symbol", url));
                     continue;
                 }
+            } else if (isPasswordKey(key) && isPlausiblePassword(trimmedVal)) {
+                // Passwords are often short and word-based (Spring2025!, Welcome2024Prod); under a
+                // password-family key, 8+ characters with a digit or symbol is enough.
             } else if (!forceInclude && !isProbableSecretValue(val)) {
                 dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal),
                         "not_probable_secret_value", url));
@@ -901,7 +1235,7 @@ public class SecretScanner {
             // e.g. fbAppId:"fb:app_id", ogAudioSecureUrl:"og:audio:secure_url",
             //      bookReleaseDate:"book:release_date".  These are colon-namespaced string
             // constants (property name strings in meta-tag config objects) — not secrets.
-            if (trimmedVal.matches("[a-z][a-z0-9_]*:[a-z][a-z0-9_:]*")) {
+            if (trimmedVal.matches("(?:og|fb|twitter|article|book|music|video|profile|al):[a-z][a-z0-9_:]*")) {
                 dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal), "og_property_name", url));
                 continue;
             }
@@ -932,7 +1266,7 @@ public class SecretScanner {
                 if (!isCryptoHexKey && !isSemanticSecretKey(key)) {
                     String hexCtx = text.substring(Math.max(0, m.start() - 200),
                             Math.min(text.length(), m.end() + 200));
-                    if (!Patterns.CRYPTO_OP_PATTERN.matcher(hexCtx).find()) {
+                    if (!Patterns.CRYPTO_OP_PATTERN.matcher(budgeted(hexCtx)).find()) {
                         dbgAdd(dbg, new DebugEntry("GENERIC_KV", key, dbgVal(trimmedVal),
                                 "hex_no_crypto_context", url));
                         continue;
@@ -998,19 +1332,88 @@ public class SecretScanner {
             // Include both line number AND byte offset in the dedup key so that minified bundles —
             // where every match shares the same lineNumber because the file has no line breaks —
             // still produce one finding per occurrence rather than collapsing all matches to one row.
-            int lineNum  = countLines(text, m.start());
-            int offset   = m.start();
+            // Report the value as the application sees it (trimmed, JS/JSON escapes decoded) and
+            // locate it at the value, not the key.
+            int valStart = m.start(4) + (val.length() - val.stripLeading().length());
+            int lineNum  = countLines(text, valStart);
+            int offset   = valStart;
             String dedupe = key.toLowerCase() + ":" + val + ":" + lineNum + ":" + offset;
             if (!seen.add(dedupe)) continue;
-            String sev  = scoreSeverity(key, val);
-            String conf = hasHighEntropy(val) ? "CERTAIN" : "FIRM";
+            String shown = unescapeJs(trimmedVal);
+            String sev  = scoreSeverity(key, shown);
+            String conf = hasHighEntropy(shown) ? "CERTAIN" : "FIRM";
             findings.add(SecretFinding.of(
                     "GENERIC_KV", "Secret in Key-Value Pair",
-                    key, val, sev, conf,
+                    key, shown, sev, conf,
                     lineNum,
                     extractContext(text, m.start(), m.end()), url, offset));
         }
         return findings;
+    }
+
+    /** "a" + "b" + ... : two to nine adjacent string literals joined with + (same-line, no escapes). */
+    private static final Pattern CONCAT_CHAIN = Pattern.compile(
+            "([\"'])[^\"'\\\\\\r\\n]{0,200}\\1(?:\\s*\\+\\s*([\"'])[^\"'\\\\\\r\\n]{0,200}\\2){1,8}");
+    private static final Pattern STRING_LITERAL = Pattern.compile("([\"'])([^\"'\\\\\\r\\n]*)\\1");
+    private static final int MAX_CONCAT_CHAINS = 2000;
+
+    /**
+     * Secrets split across string concatenation ({@code apiKey = "sk_live_" + "51H..."}). Each
+     * chain is folded into one literal, placed after the 100 characters that precede it (so the
+     * key is still there), and run through the vendor rules and GENERIC_KV. Only values that do
+     * not occur unfolded in the text are kept (the normal passes already report those); they are
+     * located at the start of the chain.
+     */
+    private List<SecretFinding> scanConcatenatedStrings(String text, String url) {
+        if (text.indexOf('+') < 0) return List.of();
+        List<SecretFinding> out = new ArrayList<>();
+        Matcher m = CONCAT_CHAIN.matcher(budgeted(text));
+        int chains = 0;
+        while (m.find() && chains++ < MAX_CONCAT_CHAINS) {
+            StringBuilder folded = new StringBuilder();
+            Matcher lit = STRING_LITERAL.matcher(text).region(m.start(), m.end());
+            while (lit.find()) folded.append(lit.group(2));
+            if (folded.length() < 8) continue;
+            String prefix = text.substring(Math.max(0, m.start() - 100), m.start());
+            String snippet = prefix + '"' + folded + '"';
+            List<SecretFinding> hits = new ArrayList<>(scanAnchoredTokens(snippet, url));
+            hits.addAll(scanGenericKV(snippet, url, null));
+            for (SecretFinding f : hits) {
+                String v = f.matchedValue();
+                if (v == null || text.contains(v)) continue;
+                out.add(new SecretFinding(f.ruleId(), f.ruleName(), f.keyName(), v, f.severity(), f.confidence(),
+                        countLines(text, m.start()), extractContext(text, m.start(), m.end()), url,
+                        f.targetUrl(), m.start(), f.meta().withReason("concatenated")));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Key/value pairs whose quotes are escaped: JSON held inside a string
+     * ({@code "cfg":"{\"apiKey\":\"...\"}"}) or entity-encoded in an HTML attribute
+     * ({@code data-config="{&quot;apiKey&quot;:&quot;...&quot;}"}). The quotes are decoded on a
+     * copy, GENERIC_KV runs on it, and each finding is located at its value in the original text
+     * (a value that only exists in decoded form is dropped rather than reported at a wrong place).
+     */
+    private List<SecretFinding> scanEscapedKV(String text, String url, List<DebugEntry> dbg) {
+        boolean slash = text.contains("\\\"") || text.contains("\\'");
+        boolean ent = text.contains("&quot;") || text.contains("&#34;") || text.contains("&#x22;")
+                || text.contains("&#39;") || text.contains("&#x27;") || text.contains("&apos;");
+        if (!slash && !ent) return List.of();
+        String dec = text;
+        if (slash) dec = dec.replace("\\\"", "\"").replace("\\'", "'");
+        if (ent) dec = dec.replace("&quot;", "\"").replace("&#34;", "\"").replace("&#x22;", "\"")
+                .replace("&#39;", "'").replace("&#x27;", "'").replace("&apos;", "'").replace("&amp;", "&");
+        List<SecretFinding> out = new ArrayList<>();
+        for (SecretFinding f : scanGenericKV(dec, url, null)) {   // the plain pass already logged suppressions
+            String v = f.matchedValue();
+            int at = v == null ? -1 : text.indexOf(v);
+            if (at < 0) continue;
+            out.add(new SecretFinding(f.ruleId(), f.ruleName(), f.keyName(), v, f.severity(), f.confidence(),
+                    countLines(text, at), extractContext(text, at, at + v.length()), url, f.targetUrl(), at, f.meta()));
+        }
+        return out;
     }
 
     /**
@@ -1028,8 +1431,8 @@ public class SecretScanner {
         // Match: parentKey : { [anyExpr] : "value" }
         // Tolerates optional whitespace, single or double quotes around the value.
         java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
-                "(?i)([A-Za-z0-9_\\-]+)\\s*:\\s*\\{\\s*\\[[^\\]]{1,60}\\]\\s*:\\s*[\"']([^\"'\\r\\n]{6,300})[\"']");
-        java.util.regex.Matcher m = pat.matcher(text);
+                "(?i)(?<![A-Za-z0-9_\\-])([A-Za-z0-9_\\-]++)\\s*:\\s*\\{\\s*\\[[^\\]]{1,60}\\]\\s*:\\s*[\"']([^\"'\\r\\n]{6,300})[\"']");
+        java.util.regex.Matcher m = pat.matcher(budgeted(text));
         Set<String> seen = new HashSet<>();
         while (m.find()) {
             String parentKey = m.group(1);
@@ -1085,9 +1488,7 @@ public class SecretScanner {
         scanSsrPattern(Patterns.GENERIC_WINDOW_CONFIG, text, url, "::spa-config", findings, seenBlobs);
 
         // 3. <script type="application/json"> tags — Next.js __NEXT_DATA__ and similar
-        Matcher jm = Patterns.JSON_SCRIPT_TAG.matcher(text);
-        while (jm.find()) {
-            String blob = jm.group(1);
+        for (String blob : com.secretscanner.core.ScriptBlocks.json(text)) {
             if (blob == null) continue;
             blob = blob.trim();
             if (blob.length() < 20) continue;
@@ -1102,7 +1503,7 @@ public class SecretScanner {
     /** Helper: apply a single SSR state pattern and walk each matched JSON blob. */
     private void scanSsrPattern(java.util.regex.Pattern pattern, String text, String url,
                                 String suffix, List<SecretFinding> findings, Set<String> seenBlobs) {
-        Matcher m = pattern.matcher(text);
+        Matcher m = pattern.matcher(budgeted(text));
         while (m.find()) {
             String blob = m.group(1);
             if (blob == null || blob.length() < 20) continue;
@@ -1129,7 +1530,7 @@ public class SecretScanner {
     private List<SecretFinding> scanHighEntropyValues(String text, String url, List<DebugEntry> dbg) {
         List<SecretFinding> findings = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        Matcher m = Patterns.QUOTED_LONG_VALUE.matcher(text);
+        Matcher m = Patterns.QUOTED_LONG_VALUE.matcher(budgeted(text));
         while (m.find()) {
             String val = m.group(1);
             if (val == null || val.length() < 20 || isPlaceholder(val)) continue;
@@ -1137,7 +1538,8 @@ public class SecretScanner {
             // e.g., null_or_empty_id_token, acquire_token_start, interaction_status_key
             if (val.matches("[a-z][a-z0-9]*(_[a-z][a-z0-9]*)+")) continue;
             // Reject dotted/colon namespace constants
-            if (val.matches("[a-zA-Z][a-zA-Z0-9]*([:._][a-zA-Z][a-zA-Z0-9]*)+")) continue;
+            if (val.matches("[a-zA-Z][a-zA-Z0-9]*([:._][a-zA-Z][a-zA-Z0-9]*)+")
+                    && !isJwt(val) && isIdentifierLike(val)) continue;
             // Reject OID / dotted-decimal values: "1.2.840.113549.1.1.1"
             // These pass the digit-ratio gate (14/20 = 70%) but are not secrets.
             if (val.matches("[0-9]+(\\.[0-9]+){3,}")) continue;
@@ -1185,11 +1587,16 @@ public class SecretScanner {
             // (encrypt, decrypt, AES, HMAC, CryptoJS, cipher) appear within 200 chars of the
             // value, do not suppress.  200 chars covers minified-JS packing where a hex literal
             // and its encrypt() call site may be 100+ chars apart.
-            if (val.matches("[0-9a-f]{24,40}") || val.matches("[0-9a-f]{40}")
-                    || val.matches("[0-9a-f]{64}")) {
+            // Key name on the same line, recovered early: a semantic secret key (x-api-key,
+            // data-api-key, SP_CONFIG_KEY) overrides the hex and context guards below.
+            String nearKey = extractNearbyKeyName(text, m.start());
+            boolean nearKeySecret = nearKey != null && !isForcedNoiseKey(nearKey)
+                    && (isSemanticSecretKey(nearKey) || keyEndsInSecretWord(nearKey));
+            if (!nearKeySecret && (val.matches("[0-9a-f]{24,40}") || val.matches("[0-9a-f]{40}")
+                    || val.matches("[0-9a-f]{64}"))) {
                 String hexCtx = text.substring(Math.max(0, m.start() - 200),
                         Math.min(text.length(), m.end() + 200));
-                if (!Patterns.CRYPTO_OP_PATTERN.matcher(hexCtx).find()) {
+                if (!Patterns.CRYPTO_OP_PATTERN.matcher(budgeted(hexCtx)).find()) {
                     dbgAdd(dbg, new DebugEntry("ENTROPY_TOKEN", "",
                             dbgVal(val), "hex_guard", url));
                     continue;
@@ -1251,14 +1658,21 @@ public class SecretScanner {
             // both for noise filtering and as an alternative to ENTROPY_CONTEXT_KW.
             // ENTROPY_CONTEXT_KW uses \b which fails for compound names like
             // Ocp_Apim_Subscription_Key where '_' precedes 'subscription' (both \w chars).
-            String keyName = extractNearbyKeyName(text, m.start());
+            String keyName = nearKey;
             // Skip findings where the recovered key is a known UI/layout noise key
-            // (e.g. "class", "style", "label") — these are filtered in scanGenericKV
-            // but the entropy scanner needs its own guard.
-            if (keyName != null && Patterns.NOISE_KEYNAMES.matcher(keyName).matches()) continue;
+            // (e.g. "class", "style", "label") or a forced-noise key (csrf, client_id) — these
+            // are filtered in scanGenericKV but the entropy scanner needs its own guard.
+            if (keyName != null && (Patterns.NOISE_KEYNAMES.matcher(keyName).matches() || isForcedNoiseKey(keyName))) {
+                dbgAdd(dbg, new DebugEntry("ENTROPY_TOKEN", keyName, dbgVal(val), "noise_key", url));
+                continue;
+            }
             boolean hasContextKw = Patterns.ENTROPY_CONTEXT_KW.matcher(preCtx).find() ||
                                    Patterns.ENTROPY_CONTEXT_KW.matcher(postCtx).find();
-            boolean keyIsSecret  = keyName != null && isSemanticSecretKey(keyName);
+            boolean keyIsSecret  = nearKeySecret;
+            if (isPublicByDesign(keyName, val)) {
+                dbgAdd(dbg, new DebugEntry("ENTROPY_TOKEN", keyName != null ? keyName : "", dbgVal(val), "public_by_design", url));
+                continue;
+            }
             if (!hasContextKw && !keyIsSecret) {
                 dbgAdd(dbg, new DebugEntry("ENTROPY_TOKEN",
                         keyName != null ? keyName : "",
@@ -1267,7 +1681,7 @@ public class SecretScanner {
             }
             String dedupe = "ENTROPY:" + val;
             if (!seen.add(dedupe)) continue;
-            String sev = keyName != null ? scoreSeverity(keyName, val) : "MEDIUM";
+            String sev = keyName != null ? atLeastMedium(scoreSeverity(keyName, val)) : "MEDIUM";
             String ctx = extractContext(text, m.start(), m.end());
             findings.add(SecretFinding.of(
                     "ENTROPY_TOKEN", "High-Entropy Secret Token",
@@ -1295,7 +1709,7 @@ public class SecretScanner {
             Patterns.GETTER_FUNC_RETURN
         };
         for (java.util.regex.Pattern pat : patterns) {
-            Matcher m = pat.matcher(text);
+            Matcher m = pat.matcher(budgeted(text));
             while (m.find()) {
                 String name = m.group(1);
                 String val  = m.group(2);
@@ -1328,17 +1742,56 @@ public class SecretScanner {
         Matcher km = Patterns.KEY_BEFORE_VALUE.matcher(linePrefix.stripTrailing());
         String last = null;
         while (km.find()) last = km.group(1);
+        // HTML attributes: value="..." / content="..." take their meaning from the sibling
+        // name="..." (hidden inputs, meta tags), not from the attribute name.
+        if (last != null && (last.equalsIgnoreCase("value") || last.equalsIgnoreCase("content"))) {
+            Matcher nm = HTML_NAME_ATTR.matcher(linePrefix);
+            String name = null;
+            while (nm.find()) name = nm.group(1);
+            if (name != null) last = name;
+        }
         return last;
     }
 
+    private static final Pattern HTML_NAME_ATTR =
+            Pattern.compile("(?i)\\b(?:name|property|id)\\s*=\\s*[\"']([A-Za-z][A-Za-z0-9_.:\\-]{1,60})[\"']");
+
+    /**
+     * True when a recovered key name ends in a secret word (key, secret, token, password ...),
+     * e.g. SP_CONFIG_KEY, mixpanelToken, ws_secret. Common non-secret compounds are excluded
+     * (primaryKey, sortKey, cacheKey, i18nKey, routeKey ...).
+     */
+    static boolean keyEndsInSecretWord(String key) {
+        if (key == null) return false;
+        String[] parts = key.split("(?<=[a-z0-9])(?=[A-Z])|[_\\-.:]+");
+        if (parts.length == 0) return false;
+        String last = parts[parts.length - 1].toLowerCase(java.util.Locale.ROOT);
+        if (!(last.equals("key") || last.equals("secret") || last.equals("token") || last.equals("password")
+                || last.equals("pwd") || last.equals("passphrase") || last.equals("credential")
+                || last.equals("credentials") || last.equals("apikey"))) return false;
+        if (parts.length >= 2) {
+            String prev = parts[parts.length - 2].toLowerCase(java.util.Locale.ROOT);
+            if (NON_SECRET_KEY_PREFIXES.contains(prev)) return false;
+        }
+        return true;
+    }
+
+    private static final Set<String> NON_SECRET_KEY_PREFIXES = Set.of(
+            "primary", "sort", "cache", "route", "i18n", "translation", "partition", "foreign", "row",
+            "unique", "react", "list", "map", "lookup", "index", "item", "query", "menu", "nav", "tab",
+            "store", "state", "event", "element", "field", "column", "label", "message", "locale",
+            "storage", "hot", "short", "shortcut", "keyboard", "next", "prev", "page", "csrf", "xsrf");
+
     /**
      * Recursive JSON body walker — uses Gson (Apache 2.0).
-     * depth cap: 20, findings cap: 50.
+     * depth cap: 20, findings cap: 500.
      */
     private List<SecretFinding> walkJsonBody(String body, String url) {
         if (body == null || body.isBlank()) return List.of();
         try {
-            JsonElement root = JsonParser.parseString(body);
+            String json = body.stripLeading();
+            if (json.startsWith(")]}'")) json = json.substring(4);        // anti-XSSI prefix
+            JsonElement root = JsonParser.parseString(json);
             List<SecretFinding> findings = new ArrayList<>();
             Set<String> seen = new HashSet<>();
             walkJsonNode(root, "", findings, seen, url, 0);
@@ -1432,6 +1885,7 @@ public class SecretScanner {
             if (!isAzureGuid(val) || !isAzureCredentialKey(key)) return;
         }
         if (Patterns.BLOCKCHAIN_HASH_KEY.matcher(key).find()) return;
+        if (isPublicByDesign(key, val)) return;
 
         String dedupe = key.toLowerCase() + ":" + val;
         if (!seen.add(dedupe)) return;
@@ -1449,6 +1903,7 @@ public class SecretScanner {
             Matcher m = rule.pattern().matcher(val);
             if (m.find()) {
                 String matched = m.group(0).trim();
+                if (anchoredRejection(rule.ruleId(), matched, path) != null) continue;
                 String dedupe  = rule.ruleId() + ":" + matched;
                 if (!seen.add(dedupe)) continue;
                 findings.add(SecretFinding.of(
@@ -1467,7 +1922,8 @@ public class SecretScanner {
     private List<SecretFinding> scanXmlLeaves(String text, String url) {
         List<SecretFinding> findings = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        Matcher m = Patterns.XML_ELEMENT.matcher(text);
+        text = unwrapCdata(text);
+        Matcher m = Patterns.XML_ELEMENT.matcher(budgeted(text));
         while (m.find()) {
             String key = m.group(1);
             String val = m.group(2).trim();
@@ -1480,10 +1936,10 @@ public class SecretScanner {
     /** SSN dual-guard: format match + key context in surrounding lines. */
     private List<SecretFinding> scanPiiSsn(String text, String url) {
         List<SecretFinding> findings = new ArrayList<>();
-        Matcher m = Patterns.SSN.matcher(text);
+        Matcher m = Patterns.SSN.matcher(budgeted(text));
         while (m.find()) {
             String window = extractWindow(text, m.start(), 3);
-            if (!Patterns.SSN_CONTEXT.matcher(window).find()) continue;
+            if (!Patterns.SSN_CONTEXT.matcher(budgeted(window)).find()) continue;
             findings.add(SecretFinding.of(
                     "SSN_PII", "Social Security Number (PII)",
                     "ssn", m.group(0), "MEDIUM", "FIRM",
@@ -1494,9 +1950,20 @@ public class SecretScanner {
     }
 
     /** Credit card: format match + Luhn validation + context checks. */
+    private static final Pattern CC_GROUPED = Pattern.compile(
+            "(?<![0-9])(?:[2-6][0-9]{3}([ -])[0-9]{4}\\1[0-9]{4}\\1[0-9]{4}|3[47][0-9]{2}([ -])[0-9]{6}\\2[0-9]{5})(?![0-9])");
+
     private List<SecretFinding> scanPiiCreditCard(String text, String url) {
         List<SecretFinding> findings = new ArrayList<>();
-        Matcher m = Patterns.CC_CANDIDATE.matcher(text);
+        // Grouped form (4111 1111 1111 1111 / 4111-1111-1111-1111): separators stripped for Luhn
+        Matcher gm = CC_GROUPED.matcher(budgeted(text));
+        while (gm.find()) {
+            String digits = gm.group().replaceAll("[ -]", "");
+            if (!luhnValid(digits)) continue;
+            findings.add(SecretFinding.of("CC_PII", "Credit Card Number (PII)", "credit_card", gm.group(), "HIGH", "FIRM",
+                    countLines(text, gm.start()), extractContext(text, gm.start(), gm.end()), url));
+        }
+        Matcher m = Patterns.CC_CANDIDATE.matcher(budgeted(text));
         while (m.find()) {
             String candidate = m.group(0);
             if (!luhnValid(candidate)) continue;
@@ -1513,6 +1980,15 @@ public class SecretScanner {
                 // Looks like a numeric expression — ensure it's quoted or in data context
                 if (!before.matches(".*[\"']\\s*$")) continue;
             }
+            // Luhn-valid numeric IDs (orderId, fbId, trackingNumber) are not cards unless the key says so
+            String keyBefore = text.substring(Math.max(0, m.start() - 40), m.start()).toLowerCase();
+            Matcher km = CC_KEY_BEFORE.matcher(keyBefore);
+            if (km.find()) {
+                String k = km.group(1);
+                boolean cardWord = k.contains("card") || k.contains("pan") || k.contains("ccnum") || k.contains("cc_") || k.equals("cc");
+                if (!cardWord && (k.endsWith("id") || k.contains("ref") || k.contains("number") || k.contains("no")
+                        || k.contains("ts") || k.contains("time") || k.contains("order") || k.contains("track"))) continue;
+            }
             findings.add(SecretFinding.of(
                     "CC_PII", "Credit Card Number (PII)",
                     "credit_card", candidate, "HIGH", "FIRM",
@@ -1521,6 +1997,8 @@ public class SecretScanner {
         }
         return findings;
     }
+
+    private static final Pattern CC_KEY_BEFORE = Pattern.compile("[\"']?([a-z_][a-z0-9_]{0,40})[\"']?\\s*[:=]\\s*[\"']?\\s*$");
 
     // =========================================================================
     // Utility — crypto / math
@@ -1576,9 +2054,25 @@ public class SecretScanner {
         }
     }
 
+    /**
+     * FORCED_NOISE_KEYS with '-', '.' and spaces read as '_' (client-id, Client.Id = client_id).
+     * Separators are equated, not removed: clientId stays distinct from client_id on purpose.
+     */
+    private static final Set<String> FORCED_NOISE_KEYS_NORM;
+    static {
+        Set<String> n = new HashSet<>();
+        for (String k : Patterns.FORCED_NOISE_KEYS) n.add(normSeparators(k));
+        FORCED_NOISE_KEYS_NORM = Set.copyOf(n);
+    }
+
+    private static String normSeparators(String key) {
+        return key.trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[\\-. ]+", "_");
+    }
+
     private static boolean isForcedNoiseKey(String key) {
         if (key == null) return false;
-        return Patterns.FORCED_NOISE_KEYS.contains(key.trim().toLowerCase());
+        String k = key.trim().toLowerCase();
+        return Patterns.FORCED_NOISE_KEYS.contains(k) || FORCED_NOISE_KEYS_NORM.contains(normSeparators(k));
     }
 
     private static boolean isSemanticSecretKey(String name) {
@@ -1662,21 +2156,23 @@ public class SecretScanner {
                     || lastPart.equals("directive") || lastPart.equals("pipe")) {
                 return false;
             }
-            boolean hasSecretPrefix = false;
-            for (String p : parts) {
-                if (SECRET_KEY_PREFIXES.contains(p)) { hasSecretPrefix = true; break; }
-            }
-            for (String part : parts) {
-                // These require a recognized domain prefix to be meaningful.
-                // startsWith("key") catches compound suffixes like ENCRYPTION_KEYGCM → "keygcm",
-                // aesKeyBytes → "keybytes", etc. Length cap avoids over-matching long words.
+            for (int ti = 0; ti < parts.length; ti++) {
+                String part = parts[ti];
+                // These require a recognized domain prefix in ANOTHER segment: resourceName and
+                // subscriptionPlan are not secrets just because "resource"/"subscription" can be
+                // both a prefix and a target. startsWith("key") catches compound suffixes like
+                // ENCRYPTION_KEYGCM → "keygcm", aesKeyBytes → "keybytes"; the length cap avoids
+                // over-matching long words.
                 boolean isKeyTarget = part.equals("key")
                         || (part.startsWith("key") && part.length() <= 12);
-                if ((isKeyTarget || part.equals("token") ||
+                boolean isTarget = isKeyTarget || part.equals("token") ||
                      part.equals("secret") || part.equals("subscription") ||
                      part.equals("id") || part.equals("resource") ||
-                     part.equals("iv") || part.equals("nonce") || part.equals("salt")) && hasSecretPrefix) {
-                    return true;
+                     part.equals("iv") || part.equals("nonce") || part.equals("salt");
+                if (isTarget) {
+                    for (int pi = 0; pi < parts.length; pi++) {
+                        if (pi != ti && SECRET_KEY_PREFIXES.contains(parts[pi])) return true;
+                    }
                 }
                 // Password-family words are always a secret signal
                 if (part.equals("credential") || part.equals("credentials") ||
@@ -1715,6 +2211,99 @@ public class SecretScanner {
      * starting with "ey").  JWTs appear in every authenticated request and must
      * never be reported as secret findings.
      */
+    private static final Pattern IDENT_SPLIT = Pattern.compile(
+            "(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|[_.\\-:$]+|(?<=\\D)(?=\\d)|(?<=\\d)(?=\\D)");
+
+    /**
+     * True if the value is built from word-like parts, as identifiers, enum values and dotted
+     * names are (getElementsByTagName, PENDING_PAYMENT_12_DAYS, msal:acquireTokenStart), rather
+     * than random material (Xk9mP2qR7tLw, JBSWY3DPEHPK3PXP, Ab3d..._Rs8t...). Parts are split at
+     * case changes, separators and letter/digit boundaries. Random material shows up as more than
+     * two separate digit groups, a run of five or more consonants inside a part, or a high share of
+     * one- and two-letter parts.
+     */
+    /**
+     * True if the string literal whose opening quote is at {@code openQuote} and which ends just
+     * before {@code afterClose} is joined to something with + (on the same line).
+     */
+    static boolean isConcatOperand(String text, int openQuote, int afterClose) {
+        int i = afterClose;
+        while (i < text.length() && (text.charAt(i) == ' ' || text.charAt(i) == '\t')) i++;
+        if (i < text.length() && text.charAt(i) == '+' && (i + 1 >= text.length() || text.charAt(i + 1) != '+')) return true;
+        int j = openQuote - 1;
+        while (j >= 0 && (text.charAt(j) == ' ' || text.charAt(j) == '\t')) j--;
+        return j >= 0 && text.charAt(j) == '+' && (j == 0 || text.charAt(j - 1) != '+');
+    }
+
+    static boolean isIdentifierLike(String v) {
+        if (v == null || v.isEmpty()) return false;
+        int digitGroups = 0, letterParts = 0, shortParts = 0;
+        for (String w : IDENT_SPLIT.split(v)) {
+            if (w.isEmpty()) continue;
+            if (w.chars().allMatch(Character::isDigit)) { digitGroups++; continue; }
+            if (!w.chars().allMatch(Character::isLetter)) return false;
+            letterParts++;
+            if (w.length() <= 2) shortParts++;
+            if (w.length() >= 4 && maxConsonantRun(w) >= 5) return false;
+        }
+        if (letterParts == 0 || digitGroups > 2) return false;
+        return letterParts < 3 || shortParts * 10 < letterParts * 4;
+    }
+
+    private static int maxConsonantRun(String w) {
+        int best = 0, run = 0;
+        for (int i = 0; i < w.length(); i++) {
+            char c = Character.toLowerCase(w.charAt(i));
+            if ("aeiouy".indexOf(c) >= 0) run = 0;
+            else best = Math.max(best, ++run);
+        }
+        return best;
+    }
+
+    /** Key names that hold passwords: password, db_password, adminPwd, passphrase, smtpPass ... */
+    static boolean isPasswordKey(String key) {
+        if (key == null) return false;
+        String k = key.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        if (k.contains("passwordhash") || k.contains("passwordpolicy") || k.contains("passwordlength")
+                || k.contains("passwordrule") || k.contains("passwordfield") || k.contains("passwordlabel")
+                || k.contains("passwordreset") || k.contains("forgotpassword") || k.endsWith("url")) return false;
+        return k.contains("password") || k.contains("passwd") || k.contains("passphrase")
+                || k.endsWith("pwd") || k.endsWith("pass") || k.equals("pw");
+    }
+
+    /** 8-128 chars, no whitespace, has a digit or symbol, and is not code, a selector or a path. */
+    static boolean isPlausiblePassword(String v) {
+        if (v == null || v.length() < 8 || v.length() > 128) return false;
+        if (v.chars().anyMatch(Character::isWhitespace)) return false;
+        if (v.startsWith("[") || v.startsWith(".") || v.startsWith("/") || v.startsWith("#") || v.startsWith("$")) return false;
+        if (v.contains("(") || v.contains("{") || v.contains("=>") || v.contains("://")) return false;
+        String sym = "~`!@#$%^&*+=|?.:,;_-";
+        return v.chars().anyMatch(Character::isDigit) || v.chars().anyMatch(c -> sym.indexOf(c) >= 0);
+    }
+
+    /**
+     * Keys that are public by design and shipped to every browser on purpose: reCAPTCHA site
+     * keys, search-only keys (Algolia and similar), RUM beacons (Boomerang/mPulse), client SDK
+     * UUIDs. Shared by every stage so they are judged the same way wherever they are found.
+     */
+    static boolean isPublicByDesign(String key, String val) {
+        if (val == null) return false;
+        String v = val.trim();
+        String kl = key == null ? "" : key.toLowerCase(java.util.Locale.ROOT).replaceAll("[_\\-]", "");
+        if (v.startsWith("6L") && v.matches("6L[A-Za-z0-9_-]{36,42}")) return true;              // reCAPTCHA site key
+        // "search"-named key, but not "research"/"researcher" (separators are stripped from kl, so
+        // "researchApiKey" -> "researchapikey" would otherwise match the "search" substring).
+        if (kl.contains("search") && !kl.contains("research") && v.matches("[A-Za-z0-9]{20,40}")) return true;  // search-only key
+        if (kl.contains("boomr")) return true;                                                   // RUM beacon key
+        if (kl.contains("sdk") && v.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+            return true;                                                                         // client SDK app id
+        return kl.contains("sitekey") || kl.equals("recaptchakey");
+    }
+
+    private static String atLeastMedium(String sev) {
+        return "LOW".equals(sev) ? "MEDIUM" : sev;   // INFORMATION stays: public-by-design keys
+    }
+
     private static boolean isJwt(String val) {
         return val != null && JWT_PAT.matcher(val.trim()).matches();
     }
@@ -1737,12 +2326,14 @@ public class SecretScanner {
             String rawUrl = f.sourceUrl() != null ? f.sourceUrl() : "";
             String host;
             try {
-                String h = new java.net.URI(rawUrl).getHost();
+                String h = new java.net.URI(rawUrl.replaceFirst(" \\[[^\\]]*\\]$", "")).getHost();
                 host = h != null ? h : rawUrl;
             } catch (Exception ignored) {
                 host = rawUrl;
             }
-            if (!seenRequestValues.add(host + '\u0000' + f.matchedValue())) continue;
+            if (seenRequestValues.size() > 50_000) seenRequestValues.clear();   // bound memory over long sessions
+            boolean first = seenRequestValues.add(host + '\u0000' + f.matchedValue());
+            if (!first && !EXPLICIT_RESCAN.get()) continue;
             result.add(f);
         }
         return result;
@@ -1827,6 +2418,9 @@ public class SecretScanner {
         // (b) short alphanumeric identifiers — but exempt all-hex strings (APIM keys, MD5 hashes,
         //     subscription keys) which are always credential values, never schema field names.
         if (!v.matches("[a-fA-F0-9]+") && v.matches("[A-Za-z_][A-Za-z0-9_]*") && v.length() <= 32) {
+            // Word-shaped (camelCase / snake_case parts, digits only as a suffix or two): an identifier.
+            // Anything else is random material and continues to the remaining checks.
+            if (isIdentifierLike(v)) return false;
             // Exception: random crypto keys (AES-256, HMAC, etc.) stored as 32-char alphanumeric
             // strings have frequent case alternation throughout the string, unlike camelCase/PascalCase
             // identifiers that only change case at word boundaries.  If ≥30% of adjacent letter pairs
@@ -1842,14 +2436,13 @@ public class SecretScanner {
                 }
                 if (letterPairs >= 10 && caseChanges * 10 >= letterPairs * 3) return true;
             }
-            return false;
         }
         // Reject SCREAMING_SNAKE_CASE enum/constant values
         // e.g., PENDING_UNABLE_POSTPONE_PAYMENT_12_DAYS_CHANGE_KEY, INTERACTION_STATUS_KEY
-        if (v.matches("[A-Z][A-Z0-9_]+") && v.length() <= 80) return false;
+        if (v.matches("[A-Z][A-Z0-9_]+") && v.length() <= 80 && isIdentifierLike(v)) return false;
         // Reject dotted/colon namespace identifier patterns (library constants, URNs, event names)
         // e.g., adal.idtoken, msal:acquireTokenStart, interaction.status, oauth2:scope:read
-        if (v.matches("[a-zA-Z][a-zA-Z0-9]*([:._][a-zA-Z][a-zA-Z0-9]*)+")) return false;
+        if (v.matches("[a-zA-Z][a-zA-Z0-9]*([:._][a-zA-Z][a-zA-Z0-9]*)+") && !isJwt(v) && isIdentifierLike(v)) return false;
         // Extend the dotted-namespace rejection to JS identifiers starting with _ or $
         // (Angular / Vue framework runtime references, e.g. "__$$environment.apis.agentKeyApi",
         //  "$scope.user.token", "_prototype.toString").  These are runtime-template-substituted
@@ -1944,10 +2537,20 @@ public class SecretScanner {
         for (String prefix : Patterns.FRAMEWORK_ATTR_PREFIXES) {
             if (lower.startsWith(prefix)) return true;
         }
-        // Vue/React/DOM event handlers: onClick, onChange, onKeyUp, onMouseOver, etc.
-        if (lower.matches("on[a-z]{2,}")) return true;
-        return false;
+        // Vue/React/DOM event handlers: onClick, onChange, onKeyUp (camelCase) or the lowercase
+        // DOM attribute names (onclick, onchange ...). Matching "on" + any letters would also
+        // swallow onesignalApiKey, onfidoToken, oneloginSecret.
+        if (key.matches("on[A-Z][A-Za-z]*") && !keyEndsInSecretWord(key)) return true;
+        return DOM_EVENT_ATTRS.contains(lower);
     }
+
+    private static final Set<String> DOM_EVENT_ATTRS = Set.of(
+            "onclick", "ondblclick", "onchange", "oninput", "onsubmit", "onreset", "onload", "onunload",
+            "onerror", "onabort", "onfocus", "onblur", "onkeyup", "onkeydown", "onkeypress", "onmouseover",
+            "onmouseout", "onmousedown", "onmouseup", "onmousemove", "onmouseenter", "onmouseleave",
+            "onscroll", "onresize", "onselect", "ontouchstart", "ontouchend", "ontouchmove", "oncontextmenu",
+            "ondrag", "ondrop", "ondragover", "onpaste", "oncopy", "oncut", "onwheel", "onanimationend",
+            "ontransitionend", "onbeforeunload", "onhashchange", "onpopstate", "onmessage", "onstorage");
 
     private boolean hasHighEntropy(String val) {
         if (val == null || val.length() < 16 || val.length() > 512) return false;
@@ -1963,8 +2566,10 @@ public class SecretScanner {
         int n       = val.length();
         int digits  = (int) val.chars().filter(Character::isDigit).count();
         int letters = (int) val.chars().filter(Character::isLetter).count();
-        // Reject alphabet-dominant short strings
-        if (letters >= n * 0.85 && digits <= 2) return false;
+        // Reject letter-dominant strings only when they read as words or have low entropy:
+        // random base62 keys are often 85%+ letters with few digits (about a third at 20 chars).
+        if (letters >= n * 0.85 && digits <= 2
+                && (isIdentifierLike(val) || shannonEntropy(val) < settings.getEntropyThreshold() + 0.5)) return false;
         // Reject repetitive strings
         if (val.chars().distinct().count() <= 3) return false;
         // Strong signals
@@ -1980,11 +2585,19 @@ public class SecretScanner {
     private static boolean isPlaceholder(String val) {
         if (val == null) return true;
         String v = val.toLowerCase();
-        // Extend %...% to cover template syntaxes that use colons/mixed-case
-        // e.g. Adobe DTM: %dl:marketplace:User_id%, %dl:marketplace:event-name%
-        if (v.matches(".*([xX]{6,}|placeholder|example|your[_\\-]?token|" +
-                      "<[^>]+>|\\$\\{[^}]+\\}|%[^%\\s]{1,80}%|dummy|test_?key|" +
-                      "changeme|replace_?me|insert_?here).*")) return true;
+        // %NAME% templates (Windows env, Adobe DTM %dl:marketplace:User_id%). The name must start
+        // with a letter, so URL-encoded passwords (Pa%24%24w0rd%21) are not mistaken for one.
+        if (v.matches(".*([xX]{6,}|placeholder|your[_\\-]?token|" +
+                      "<[^>]+>|\\$\\{[^}]+\\}|%[a-z_][a-z0-9_:.\\-]{0,79}%|dummy|test_?key|" +
+                      "replace_?me|insert_?here).*")) return true;
+        // "example" / "changeme": a placeholder unless the value is password-shaped (mixed case
+        // plus a digit, e.g. Changeme123!, Example#2024prod): a default password that is really in
+        // use is a finding. AWS documentation keys (...7EXAMPLE) stay placeholders.
+        if (v.contains("example") || v.contains("changeme")) {
+            boolean passwordShaped = val.chars().anyMatch(Character::isUpperCase)
+                    && val.chars().anyMatch(Character::isDigit) && !val.contains("EXAMPLE");
+            if (!passwordShaped) return true;
+        }
         // Curly-brace URL/path template placeholders: {userID}, {email}, {param}
         // e.g. "SearchUser?email={userID}", "/api/users/{userId}/profile"
         // These are REST URL templates — never real credential values.
@@ -2024,48 +2637,74 @@ public class SecretScanner {
     // Severity scoring
     // =========================================================================
 
+    private static final Pattern KEY_WORDS = Pattern.compile("(?<=[a-z0-9])(?=[A-Z])|[^A-Za-z0-9]+");
+    private static final Set<String> ID_LIKE_SUFFIX = Set.of(
+            "id", "ids", "name", "names", "label", "type", "url", "uri", "endpoint", "host", "region",
+            "version", "format", "length", "expiry", "expires", "ttl", "count", "index", "path");
+    private static final Set<String> CRYPTO_WORDS = Set.of(
+            "key", "iv", "aes", "hmac", "secret", "token", "cipher", "salt", "nonce", "encrypt",
+            "encryption", "decrypt", "decryption", "crypto", "signing", "ky");
+    private static final Pattern ANALYTICS_KEY = Pattern.compile(
+            "(?i).*(mixpanel|amplitude|heapanalytics|heapapp|posthog|hotjar|segmentwrite|writekey|"
+            + "googleanalytics|gtm|fullstory|clarity|newrelicbrowser|datadogrum|rumapplication).*");
+
+    /**
+     * Severity for a generic finding from its key name and value. Key names are read as words
+     * (camelCase / snake_case / kebab-case parts), so adminPassword and db_password are passwords,
+     * apiKeyId / privateKeyId are identifiers, and themeHex is not crypto material.
+     */
     private String scoreSeverity(String key, String val) {
         if (key == null) return "LOW";
-        // Azure GUIDs used as credential keys are reported at INFORMATION/MEDIUM per the key checks below.
-        // All other non-probable values default to LOW.
-        if (!isProbableSecretValue(val) && !isAzureGuid(val)) return "LOW";
-        String k = key.toLowerCase().replaceAll("[_\\-]", "");
-        // *Hex-suffixed crypto material keys (kyHex, ivHex, keyHex, secretHex, tokenHex) are always
-        // raw cryptographic key/IV material — score HIGH regardless of the prefix segment.
-        if (k.endsWith("hex") && k.length() > 3) return "HIGH";
-        // Crypto operation key names: encryptionKey*, decryptionKey*, cipherKey*, aesKey*, hmacKey*
-        if (k.contains("encryptionkey") || k.contains("decryptionkey")
-                || k.contains("cipherkey") || k.contains("aeskey") || k.contains("hmackey")) return "HIGH";
-        if (k.contains("encryptedenv") || k.contains("cryptojskey") || k.contains("cryptokey")) return "HIGH";
-        if (k.contains("subscriptionkey") || k.contains("subkey") || k.contains("ocpapim")) return "HIGH";
-        if (k.contains("apimkey"))         return "HIGH";
+        boolean passwordKey = isPasswordKey(key);
+        if (!isProbableSecretValue(val) && !isAzureGuid(val) && !(passwordKey && isPlausiblePassword(val))) return "LOW";
+        String k = key.toLowerCase(java.util.Locale.ROOT).replaceAll("[_\\-.]", "");
+        List<String> words = new ArrayList<>();
+        for (String w : KEY_WORDS.split(key)) if (!w.isEmpty()) words.add(w.toLowerCase(java.util.Locale.ROOT));
+        String last = words.isEmpty() ? k : words.get(words.size() - 1);
+        String v = val == null ? "" : val.trim();
+
+        // Public-by-design values recognisable from the value itself
+        if (v.startsWith("pk.") || v.startsWith("pk_live_") || v.startsWith("pk_test_")) return "LOW";
+        // Front-end analytics / RUM project tokens: shipped to every browser on purpose
+        if (ANALYTICS_KEY.matcher(k).matches()) return "INFORMATION";
+
+        // Identifier-style names: the value names or locates a secret, it is not the secret
+        if (ID_LIKE_SUFFIX.contains(last) && words.size() > 1) {
+            if (k.contains("clientid") || k.contains("clientsideid") || k.contains("tenantid")
+                    || k.contains("appid") || k.contains("applicationid") || k.contains("orgid")
+                    || k.contains("accountid") || k.contains("workspaceid") || k.contains("projectid"))
+                return "INFORMATION";
+            return "LOW";
+        }
+        if (k.equals("clientid") || k.equals("tenantid") || k.equals("appid")) return "INFORMATION";
+        if (k.contains("instrumentationkey") || k.contains("insightsikey") || last.equals("ikey")) return "INFORMATION";
+        if (k.contains("sitekey") || k.contains("vapid"))  return "INFORMATION";
+        if (k.equals("resource") || k.contains("resourceguid"))
+            return (isAzureGuid(v) || v.startsWith("http")) ? "INFORMATION" : "MEDIUM";
+
+        // Raw crypto material: *Hex only when another part says what it is (keyHex, ivHex, aesKeyHex)
+        if (last.equals("hex") && words.size() > 1) {
+            for (int i = 0; i < words.size() - 1; i++) if (CRYPTO_WORDS.contains(words.get(i))) return "HIGH";
+        }
+        if (k.contains("encryptionkey") || k.contains("decryptionkey") || k.contains("cipherkey")
+                || k.contains("aeskey") || k.contains("hmackey") || k.contains("encryptedenv")
+                || k.contains("cryptojskey") || k.contains("cryptokey")) return "HIGH";
+
+        if (passwordKey) return "HIGH";
+        if (k.contains("secretaccesskey") || k.contains("privatekey") || k.contains("pemkey")
+                || k.contains("clientsecret") || k.contains("secretkey") || k.contains("signingkey")
+                || k.contains("masterkey")) return "HIGH";
+        if (last.equals("secret") || last.equals("secrets") || k.equals("secret")) return "HIGH";
+        if (k.contains("subscriptionkey") || k.contains("subkey") || k.contains("ocpapim") || k.contains("apimkey")) return "HIGH";
         if (k.contains("appkey") || k.contains("applicationkey")) return "HIGH";
-        if (k.equals("secret")) return "HIGH";   // bare "secret" field in config/JSON
-        if (k.contains("secretkey") || k.contains("signingkey") || k.contains("masterkey")) return "HIGH";
-        if (k.contains("apikey") || k.contains("xapikey"))       return "HIGH";
+        if (k.contains("apikey") || k.contains("xapikey") || k.contains("accesskey")) return "HIGH";
         if (k.contains("resourcekey") || k.contains("storagekey") || k.contains("addresskey")) return "HIGH";
-        if (k.contains("privatekey") || k.contains("pemkey"))     return "HIGH";
-        if (k.contains("clientsecret"))    return "HIGH";
-        if (k.contains("refreshtoken") || k.contains("accesstoken") ||
-            k.contains("authtoken") || k.contains("sessiontoken")) return "HIGH";
-        if (k.equals("password") || k.equals("passwd") || k.equals("pass") || k.equals("pwd") ||
-            k.equals("credentials") || k.equals("credential"))     return "HIGH";
-        // Public identifiers — OAuth client IDs, app IDs, tenant/org IDs, telemetry keys,
-        // reCAPTCHA site keys, and LaunchDarkly-style client-side IDs are all intended
-        // to be embedded in frontend JS.  They carry no standalone credential risk.
-        if (k.contains("clientid") || k.contains("clientsideid")) return "INFORMATION";
-        if (k.contains("tenantid"))                               return "INFORMATION";
-        if (k.contains("instrumentationkey") || k.contains("insightsikey") || k.endsWith("ikey")) return "INFORMATION";
-        if (k.contains("appid") || k.contains("applicationid"))   return "INFORMATION";
-        if (k.contains("orgid") || k.contains("accountid") || k.contains("workspaceid")) return "INFORMATION";
-        if (k.contains("sitekey"))                                return "INFORMATION";
-        // Azure ADAL/MSAL resource identifier — bare "resource" key holding a GUID or URL
-        // identifies which Azure service is being accessed; HIGH for recon in service principal config.
-        if (k.equals("resource") || k.contains("resourceid") || k.contains("resourceguid")) return "HIGH";
-        // VAPID public key — intentionally public (Web Push), not a secret credential.
-        if (k.contains("vapid"))                                  return "INFORMATION";
-        if (k.contains("userid"))                                 return "LOW";
-        if (isSemanticSecretKey(key))      return "MEDIUM";
+        if (k.contains("refreshtoken") || k.contains("accesstoken") || k.contains("authtoken")
+                || k.contains("sessiontoken") || k.contains("apitoken") || k.contains("bearertoken")
+                || k.contains("idtoken") || k.contains("servicerolekey")) return "HIGH";
+        if (k.equals("credentials") || k.equals("credential") || last.equals("credentials")) return "HIGH";
+        if (k.contains("userid"))                           return "LOW";
+        if (isSemanticSecretKey(key) || keyEndsInSecretWord(key)) return "MEDIUM";
         return "LOW";
     }
 
@@ -2084,13 +2723,8 @@ public class SecretScanner {
         // JSON_WALK), all extracting the same UUID but with different key names. Track each
         // UUID seen per source-URL so only the first (highest-priority) finding is kept.
         Set<String> seenUuids     = new HashSet<>();
-        // Cross-rule value+line dedup: same secret value at the same line number is one
-        // finding regardless of which rule caught it (e.g. JWT_TOKEN_001 and GENERIC_KV
-        // both matching the same JWT embedded in a hidden field on line 20).
-        // Only applied when lineNumber > 0 to avoid collapsing findings that have no
-        // meaningful document position.  First rule in the pipeline wins (anchored vendor
-        // rules are added before generic KV / entropy scanners).
-        Set<String> seenValueLine = new HashSet<>();
+        // Cross-rule value+line dedup (same secret value, same line, different rules) is handled
+        // later by collapse(), which picks the most specific rule rather than whichever ran first.
         List<SecretFinding> result = new ArrayList<>();
         for (SecretFinding f : raw) {
             // For context-sensitive rules (GENERIC_KV, JSON_WALK, REQ_HEADER*) the key name
@@ -2116,13 +2750,8 @@ public class SecretScanner {
                         : f.ruleId() + ":" + f.matchedValue() + lineSuffix + offsetSuffix;
             if (!seenRuleValue.add(dedupeKey)) continue;
 
-            // Cross-rule value+(line|offset) dedup: same value at the same position = one finding.
-            // Prefer offset when present (works for minified files); fall back to line otherwise.
-            if (f.matchOffset() >= 0) {
-                if (!seenValueLine.add(f.matchedValue() + "\0" + f.matchOffset())) continue;
-            } else if (f.lineNumber() > 0) {
-                if (!seenValueLine.add(f.matchedValue() + "\0" + f.lineNumber())) continue;
-            }
+            // Cross-rule duplicates of the same value are merged later by collapse(), which picks
+            // the most specific rule rather than whichever rule happened to run first.
 
             // Cross-rule UUID dedup: a UUID embedded in an Azure connection string
             // (e.g. "InstrumentationKey=<uuid>;IngestionEndpoint=...") is extracted by
@@ -2167,6 +2796,62 @@ public class SecretScanner {
         return scanCustomRules(text, url, null);
     }
 
+    /** One parsed custom rule line: {@code Name | regex | SEVERITY}. */
+    record CustomRule(String name, String regex, String severity, java.util.regex.Pattern pattern) {}
+
+    /** Parsed custom rules for one exact rule list, with their keyword prefilter. */
+    record CustomRuleSet(List<String> source, List<CustomRule> rules,
+                         com.secretscanner.rules.KeywordPrefilter prefilter) {}
+
+    private volatile CustomRuleSet customRuleCache;
+
+    /** Returns the parsed rule set for {@code lines}, reparsing only when the list changes. */
+    private CustomRuleSet customRuleSet(List<String> lines) {
+        CustomRuleSet cached = customRuleCache;
+        if (cached != null && cached.source().equals(lines)) return cached;
+        CustomRuleSet built = parseCustomRules(lines, logging);
+        customRuleCache = built;
+        return built;
+    }
+
+    /**
+     * Parses custom rule lines exactly as the scanner always has: blank lines and '#' comments are
+     * skipped, lines without three " | "-separated parts are skipped, an unknown severity becomes
+     * MEDIUM, and a rule whose regex does not compile is logged and skipped.
+     */
+    static CustomRuleSet parseCustomRules(List<String> lines, Logging logging) {
+        List<CustomRule> rules = new ArrayList<>();
+        for (String line : lines) {
+            if (line.isBlank() || line.startsWith("#")) continue;
+            String[] parts = line.split(" \\| ", 3);
+            if (parts.length < 3) continue;
+            String ruleName = parts[0].trim();
+            String regex    = parts[1].trim();
+            String severity = parts[2].trim().toUpperCase();
+            if (ruleName.isEmpty() || regex.isEmpty()) continue;
+            if (severity.equals("INFO") || severity.equals("INFORMATIONAL")) severity = "INFORMATION";
+            if (!severity.equals("CRITICAL") && !severity.equals("HIGH") && !severity.equals("MEDIUM")
+                    && !severity.equals("LOW") && !severity.equals("INFORMATION")) {
+                if (logging != null) logging.logToOutput("SecretSifter: custom rule '" + ruleName
+                        + "' has unknown severity '" + parts[2].trim() + "'; using MEDIUM");
+                severity = "MEDIUM";
+            }
+            java.util.regex.Pattern pat;
+            try {
+                pat = java.util.regex.Pattern.compile(regex);
+            } catch (Exception ex) {
+                if (logging != null) logging.logToError("[SecretSifter] Custom rule '" + ruleName +
+                        "' has invalid regex — skipping: " + ex.getMessage());
+                continue;
+            }
+            rules.add(new CustomRule(ruleName, regex, severity, pat));
+        }
+        List<List<String>> keywords = new ArrayList<>(rules.size());
+        for (CustomRule r : rules) keywords.add(com.secretscanner.rules.RequiredLiterals.of(r.pattern()));
+        return new CustomRuleSet(List.copyOf(lines), List.copyOf(rules),
+                new com.secretscanner.rules.KeywordPrefilter(keywords));
+    }
+
     private List<SecretFinding> scanCustomRules(String text, String url, List<DebugEntry> dbg) {
         if (!settings.isCustomRulesEnabled()) return List.of();
         List<String> ruleLines = settings.getCustomRules();
@@ -2182,27 +2867,17 @@ public class SecretScanner {
         java.util.regex.Pattern assignPat = java.util.regex.Pattern.compile(
                 "[\\w\\-]+[=:][\"']?([^\"'\\r\\n=:{},]{4,})[\"']?");
         List<SecretFinding> findings = new ArrayList<>();
-        for (String line : ruleLines) {
-            if (line.isBlank() || line.startsWith("#")) continue;
-            String[] parts = line.split(" \\| ", 3);
-            if (parts.length < 3) continue;
-            String ruleName = parts[0].trim();
-            String regex    = parts[1].trim();
-            String severity = parts[2].trim().toUpperCase();
-            if (ruleName.isEmpty() || regex.isEmpty()) continue;
-            if (!severity.equals("HIGH") && !severity.equals("MEDIUM")
-                    && !severity.equals("LOW") && !severity.equals("INFORMATION")) {
-                severity = "MEDIUM";
-            }
-            java.util.regex.Pattern pat;
-            try {
-                pat = java.util.regex.Pattern.compile(regex);
-            } catch (Exception ex) {
-                logging.logToError("[SecretSifter] Custom rule '" + ruleName +
-                        "' has invalid regex — skipping: " + ex.getMessage());
-                continue;
-            }
-            java.util.regex.Matcher m = pat.matcher(text);
+        // Rules are parsed and compiled once per distinct rule list (not per response), and the
+        // keyword prefilter skips rules that cannot match this text. Matching below is unchanged.
+        CustomRuleSet crs = customRuleSet(ruleLines);
+        BitSet candidates = crs.prefilter().candidates(text);
+        for (int ci = 0; ci < crs.rules().size(); ci++) {
+            if (!candidates.get(ci)) continue;
+            CustomRule cr = crs.rules().get(ci);
+            String ruleName = cr.name();
+            String severity = cr.severity();
+            java.util.regex.Pattern pat = cr.pattern();
+            java.util.regex.Matcher m = pat.matcher(budgeted(text));
             Set<String> seen = new HashSet<>();
             while (m.find()) {
                 if (!rawMode) {
@@ -2255,6 +2930,18 @@ public class SecretScanner {
                 // (different offsets of the same captured value each surface separately).
                 if (!rawMode && !seen.add(val)) continue;
                 if (!rawMode) {
+                // Context checks look at the characters around the secret. With a capture group
+                // that is delimited in the text (quote, =, :, space, bracket before/after it) that
+                // is the group: a keyword-led rule like plaid\s*=\s*"(...)" must not be judged by
+                // the "." in "cfg.plaid". Otherwise it is the whole match: a prefix rule like
+                // acmetok_(...) must not see its own "_" as "embedded in a longer token".
+                final String delims = "\"'`=: \t\r\n([{,;<>";
+                final boolean openDelim  = !usedFullMatch && m.start(1) > 0
+                        && delims.indexOf(text.charAt(m.start(1) - 1)) >= 0;
+                final boolean closeDelim = !usedFullMatch && m.end(1) < text.length()
+                        && delims.indexOf(text.charAt(m.end(1))) >= 0;
+                final int vs = openDelim  ? m.start(1) : m.start();
+                final int ve = closeDelim ? m.end(1)   : m.end();
                 // Noise suppression — same gates used by built-in scanners:
                 // (1) isProbableSecretValue: rejects all-alpha identifiers, camelCase/PascalCase
                 //     class names, SCREAMING_SNAKE_CASE constants, kebab-case paths, JS fragments.
@@ -2287,7 +2974,10 @@ public class SecretScanner {
                 //      like jsrsasign): sha1="3021300906052b0e03021a05000414" (30 chars),
                 //      ripemd160="3021300906052b2403020105000414" (30 chars), etc.
                 //      Real API tokens that use hex always contain uppercase letters.
-                if (val.matches("[0-9a-f]{28,40}")) {
+                // Only for rules without a capture group: a rule that captures a vendor-anchored
+                // group (Twilio, Mailjet, Trello, Algolia admin ... are lowercase hex by design)
+                // has already said where the secret is. DER DigestInfo headers start with "30".
+                if (val.matches("[0-9a-f]{28,40}") && (usedFullMatch || val.startsWith("3021") || val.startsWith("3031") || val.startsWith("3041") || val.startsWith("3051"))) {
                     dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                             ruleName, dbgVal(val), "hex_crypto_oid", url));
                     continue;
@@ -2347,11 +3037,11 @@ public class SecretScanner {
                     // URL query parameter look-back: the full-match KEY=VALUE regex may fire
                     // mid-key-name when a broader key contains the matched sub-key, e.g.
                     // "&amp;idkey=0Es..." — the rule matches "key=0Es..." starting inside
-                    // "idkey". Walk backward from m.start() through any word-chars; if we reach
+                    // "idkey". Walk backward from vs through any word-chars; if we reach
                     // '?', '&', or HTML-encoded '&amp;', the whole expression is a URL query
                     // param value (server-generated, non-extractable) — not a config assignment.
                     {
-                        int back  = m.start() - 1;
+                        int back  = vs - 1;
                         int steps = 0;
                         while (back >= 0 && steps < 30
                                 && (Character.isLetterOrDigit(text.charAt(back))
@@ -2429,9 +3119,9 @@ public class SecretScanner {
                 //      JWT_TOKEN_001 already captures the full token; matching only the
                 //      signature creates noise duplicates for e.g. BOT_PROJECT_TOKEN JWTs.
                 //      Signal: matched value is base64url AND the preceding char is ".".
-                if (m.start() > 1
-                        && text.charAt(m.start() - 1) == '.'
-                        && isBase64UrlChar(text.charAt(m.start() - 2))) {
+                if (vs > 1
+                        && text.charAt(vs - 1) == '.'
+                        && isBase64UrlChar(text.charAt(vs - 2))) {
                     dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                             ruleName, dbgVal(val), "jwt_signature_segment", url));
                     continue;
@@ -2441,8 +3131,8 @@ public class SecretScanner {
                 //      server-generated, public-facing values — not extractable secrets.
                 //      Signal: the char immediately before the match is '=', and scanning
                 //      backward through the key name finds a '?' or '&' delimiter.
-                if (m.start() >= 2 && text.charAt(m.start() - 1) == '=') {
-                    int back  = m.start() - 2;
+                if (vs >= 2 && text.charAt(vs - 1) == '=') {
+                    int back  = vs - 2;
                     int steps = 0;
                     while (back >= 0 && steps < 30
                             && (Character.isLetterOrDigit(text.charAt(back))
@@ -2460,8 +3150,8 @@ public class SecretScanner {
                 //      appear in HTML href/action attributes and JavaScript template strings.
                 //      The regex often matches starting mid-key (at "token=..."), so check
                 //      whether "csrf" appears in the 5 chars immediately preceding the match.
-                if (m.start() >= 4) {
-                    String near = text.substring(Math.max(0, m.start() - 5), m.start());
+                if (vs >= 4) {
+                    String near = text.substring(Math.max(0, vs - 5), vs);
                     if (near.toLowerCase().contains("csrf")) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "csrf_token_value", url));
@@ -2471,8 +3161,8 @@ public class SecretScanner {
                 // (5f) CSP nonce filter: Content-Security-Policy nonces appear as
                 //      nonce="VALUE" or nonce='VALUE' in HTML <script> and <style> tags.
                 //      They are single-use random values, not extractable secrets.
-                if (m.start() >= 7) {
-                    String pre7 = text.substring(m.start() - 7, m.start());
+                if (vs >= 7) {
+                    String pre7 = text.substring(vs - 7, vs);
                     if (pre7.equals("nonce=\"") || pre7.equals("nonce='")) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "csp_nonce_value", url));
@@ -2496,7 +3186,13 @@ public class SecretScanner {
                         else if ("mMlLhHvVzZcCsSqQtTaA".indexOf(cur) >= 0
                                 && (Character.isDigit(next) || next == '-')) { svgHits++; }
                     }
-                    if (svgHits >= 3) {
+                    // Random tokens hit 3+ digit/command-letter pairs constantly, so also require
+                    // SVG evidence: a path-style start (M/m + number) or a d=/path attribute just
+                    // before the value.
+                    String svgPre = text.substring(Math.max(0, vs - 24), vs).toLowerCase(java.util.Locale.ROOT);
+                    boolean svgContext = val.matches("[mM]-?\\d.*")
+                            || svgPre.matches("(?s).*(\\bd\\s*[=:]\\s*[\"'`]?|<path|path\\s*[=:(]).*");
+                    if (svgHits >= 3 && svgContext) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "svg_path_data", url));
                         continue;
@@ -2509,8 +3205,8 @@ public class SecretScanner {
                 //          A single lone '%' is not enough — require 3+ to avoid
                 //          suppressing legitimate keys that happen to sit near one escape.
                 {
-                    int winStart = Math.max(0, m.start() - 80);
-                    int winEnd   = Math.min(text.length(), m.end() + 80);
+                    int winStart = Math.max(0, vs - 80);
+                    int winEnd   = Math.min(text.length(), ve + 80);
                     String window = text.substring(winStart, winEnd);
                     int pctCount = 0;
                     for (int wi = 0; wi < window.length() - 2; wi++) {
@@ -2537,8 +3233,8 @@ public class SecretScanner {
                 //         documentation examples embed real-looking values (IP addresses,
                 //         key formats) as illustrative text, not real credentials.
                 //         Signal: "placeholder" or "e.g." appears within 40 chars before match.
-                if (m.start() > 0) {
-                    String pre40 = text.substring(Math.max(0, m.start() - 40), m.start());
+                if (vs > 0) {
+                    String pre40 = text.substring(Math.max(0, vs - 40), vs);
                     String pre40lc = pre40.toLowerCase();
                     if (pre40lc.contains("placeholder") || pre40lc.contains("e.g.")) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
@@ -2550,12 +3246,12 @@ public class SecretScanner {
                 //      '.' + a file extension (pdf, js, html, png, etc.) is a filename
                 //      embedded in a URL path or href attribute, not a secret token.
                 //      e.g. "fraud-warning-notice_smallbusiness_04032023.pdf"
-                if (m.end() < text.length() - 1 && text.charAt(m.end()) == '.') {
-                    int extEnd = m.end() + 1;
+                if (ve < text.length() - 1 && text.charAt(ve) == '.') {
+                    int extEnd = ve + 1;
                     while (extEnd < text.length()
-                            && extEnd - m.end() <= 6
+                            && extEnd - ve <= 6
                             && Character.isLetter(text.charAt(extEnd))) extEnd++;
-                    int extLen = extEnd - m.end() - 1;
+                    int extLen = extEnd - ve - 1;
                     if (extLen >= 2 && extLen <= 5) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "url_filename_suffix", url));
@@ -2576,9 +3272,9 @@ public class SecretScanner {
                 //        "var <name> = __webpack_require__(N)".  Check the 40-char window after
                 //        the match end — if it contains "webpack_require", the matched value is
                 //        a build-tool variable name, not a credential.
-                if (m.end() < text.length()) {
-                    String afterMatch = text.substring(m.end(),
-                            Math.min(text.length(), m.end() + 40));
+                if (ve < text.length()) {
+                    String afterMatch = text.substring(ve,
+                            Math.min(text.length(), ve + 40));
                     if (afterMatch.contains("webpack_require")) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "webpack_variable_assignment", url));
@@ -2589,9 +3285,9 @@ public class SecretScanner {
                 //        by ':' (and the char after ':' is not '/' which would indicate a URL
                 //        scheme like "://"), the matched string is a JSON/object property KEY,
                 //        not a credential value.  e.g. "totalhroGreaterThan1Point2MRange: …"
-                if (m.end() < text.length() && text.charAt(m.end()) == ':') {
-                    char afterColon = (m.end() + 1 < text.length())
-                            ? text.charAt(m.end() + 1) : '\0';
+                if (ve < text.length() && text.charAt(ve) == ':') {
+                    char afterColon = (ve + 1 < text.length())
+                            ? text.charAt(ve + 1) : '\0';
                     if (afterColon != '/') {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "object_property_key", url));
@@ -2604,7 +3300,7 @@ public class SecretScanner {
                 //        matches a broad vendor-key pattern length (e.g. HereApiKey matches
                 //        \b[A-Za-z0-9_-]{43}\b and Angular emits 43-char function names like
                 //        "KWizardActionsComponent_k_button_2_Template").
-                if (m.end() < text.length() && text.charAt(m.end()) == '(') {
+                if (ve < text.length() && text.charAt(ve) == '(') {
                     dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                             ruleName, dbgVal(val), "function_name", url));
                     continue;
@@ -2615,8 +3311,8 @@ public class SecretScanner {
                 //        'fo|0x98badcfe|rstr_md5|_x509_getSubjectPublicKeyInfoPosFromCertHex|...'
                 //        A match immediately preceded or followed by '|' is an identifier inside
                 //        this scope list — not a credential value.
-                if ((m.start() > 0 && text.charAt(m.start() - 1) == '|')
-                        || (m.end() < text.length() && text.charAt(m.end()) == '|')) {
+                if ((vs > 0 && text.charAt(vs - 1) == '|')
+                        || (ve < text.length() && text.charAt(ve) == '|')) {
                     dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                             ruleName, dbgVal(val), "packed_js_scope_string", url));
                     continue;
@@ -2686,7 +3382,7 @@ public class SecretScanner {
                 //             window before the match for data-ATTRNAME=" — if found and the
                 //             attribute is not a known secret attr, suppress.
                 {
-                    String pre80 = text.substring(Math.max(0, m.start() - 80), m.start());
+                    String pre80 = text.substring(Math.max(0, vs - 80), vs);
                     java.util.regex.Matcher dam = java.util.regex.Pattern
                             .compile("(?i)\\bdata-([a-z][a-z0-9-]*)=[\"']?$").matcher(pre80);
                     if (dam.find()) {
@@ -2704,8 +3400,8 @@ public class SecretScanner {
                 //           like a Google Analytics tracking ID.  Signal: "NREUM" appears
                 //           within 300 chars of the match position.
                 {
-                    int winS = Math.max(0, m.start() - 300);
-                    int winE = Math.min(text.length(), m.end() + 300);
+                    int winS = Math.max(0, vs - 300);
+                    int winE = Math.min(text.length(), ve + 300);
                     if (text.substring(winS, winE).contains("NREUM")) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "newrelic_license_key", url));
@@ -2717,8 +3413,8 @@ public class SecretScanner {
                 //        content="TOKEN"> or <meta name="msvalidate.01" content="TOKEN">.
                 //        They are public, single-use ownership proofs — not extractable secrets.
                 //        Signal: "verification" appears in the 100-char window before the match.
-                if (m.start() > 0) {
-                    String pre100 = text.substring(Math.max(0, m.start() - 100), m.start());
+                if (vs > 0) {
+                    String pre100 = text.substring(Math.max(0, vs - 100), vs);
                     if (pre100.toLowerCase().contains("verification")) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "site_verification_token", url));
@@ -2746,7 +3442,12 @@ public class SecretScanner {
                         if (Character.isDigit(val.charAt(si)) != Character.isDigit(val.charAt(si + 1)))
                             dlTrans++;
                     }
-                    if (dlTrans >= 5) {
+                    // Many vendors' tokens are lowercase+digits; only call it font data when the
+                    // rule has no capture group or a PDF/font library is nearby.
+                    boolean pdfContext = usedFullMatch || java.util.regex.Pattern.compile(
+                            "(?i)jspdf|pdfmake|kerning|widths|fontmetrics|unicodeMap|\\.afm\\b")
+                            .matcher(text.substring(Math.max(0, vs - 300), Math.min(text.length(), ve + 300))).find();
+                    if (dlTrans >= 5 && pdfContext) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "pdf_font_data", url));
                         continue;
@@ -2760,10 +3461,10 @@ public class SecretScanner {
                 //     of a larger encoded blob, not at a clean token boundary.
                 //     Also covers base64url (uses - and _ instead of + and /).
                 if (val.matches("[A-Za-z0-9+/]+=*")) {
-                    boolean prevB64 = m.start() > 0
-                            && isBase64Char(text.charAt(m.start() - 1));
-                    boolean nextB64 = m.end() < text.length()
-                            && isBase64Char(text.charAt(m.end()));
+                    boolean prevB64 = vs > 0
+                            && isBase64Char(text.charAt(vs - 1));
+                    boolean nextB64 = ve < text.length()
+                            && isBase64Char(text.charAt(ve));
                     if (prevB64 || nextB64) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "base64_stream_context", url));
@@ -2771,10 +3472,10 @@ public class SecretScanner {
                     }
                 }
                 if (val.matches("[A-Za-z0-9\\-_]+=*")) {
-                    boolean prevB64url = m.start() > 0
-                            && isBase64UrlChar(text.charAt(m.start() - 1));
-                    boolean nextB64url = m.end() < text.length()
-                            && isBase64UrlChar(text.charAt(m.end()));
+                    boolean prevB64url = vs > 0
+                            && isBase64UrlChar(text.charAt(vs - 1));
+                    boolean nextB64url = ve < text.length()
+                            && isBase64UrlChar(text.charAt(ve));
                     if (prevB64url || nextB64url) {
                         dbgAdd(dbg, new DebugEntry("CUSTOM_" + ruleName.toUpperCase().replaceAll("\\s+", "_"),
                                 ruleName, dbgVal(val), "base64url_stream_context", url));
@@ -2828,7 +3529,169 @@ public class SecretScanner {
                         dbgVal(f.matchedValue()), "blocklist_key", f.sourceUrl()));
             }
         }
-        return deduplicate(filtered);
+        return collapse(deduplicate(filtered));
+    }
+
+    // =========================================================================
+    // Cross-stage collapse: one finding per secret per response
+    // =========================================================================
+
+    /** Suffixes the scanner adds to a URL for sub-scans of the same response body. */
+    private static final Pattern SUBSCAN_SUFFIX = Pattern.compile(
+            "(?:#inline-js|#json-script|#inline-json|::spa-config|::json-script-tag|::ssr[\\w-]*)+$");
+
+    /** Distinct values under one key in one response beyond which they are reported as one finding. */
+    static final int MASS_EXPOSURE_THRESHOLD = 10;
+
+    /**
+     * Merges findings that are the same secret seen by several stages (vendor rule + key/value +
+     * JSON walk + entropy, inline-script pass + whole-page pass, body + SSR copy) into one finding
+     * per value per response, and folds mass exposures (the same key holding many values in one
+     * response, e.g. passwordHash for every user) into a single finding that records the count.
+     *
+     * The kept finding is the vendor-specific one when any stage identified the vendor (it knows
+     * the token type and its real severity), otherwise the most severe, then the most specific.
+     */
+    /**
+     * JWT severity from its claims: a Supabase/PostgREST service_role (or admin) token bypasses
+     * row-level security and is HIGH; an anon key is a public client key (INFORMATION).
+     */
+    static String jwtSeverity(String jwt, String fallback) {
+        try {
+            String[] parts = jwt.split("\\.");
+            if (parts.length < 2) return fallback;
+            String json = new String(java.util.Base64.getUrlDecoder().decode(
+                    parts[1].replace('+', '-').replace('/', '_').replaceAll("=+$", "")), java.nio.charset.StandardCharsets.UTF_8);
+            java.util.regex.Matcher rm = JWT_ROLE.matcher(json);
+            if (!rm.find()) return fallback;
+            String role = rm.group(1).toLowerCase(java.util.Locale.ROOT);
+            if (role.equals("service_role") || role.equals("supabase_admin") || role.equals("admin")
+                    || role.equals("superadmin")) return "HIGH";
+            if (role.equals("anon") || role.equals("anonymous")) return "INFORMATION";
+            return fallback;
+        } catch (RuntimeException e) {
+            return fallback;
+        }
+    }
+
+    private static final Pattern JWT_ROLE = Pattern.compile("\"role\"\\s*:\\s*\"([A-Za-z_]{2,32})\"");
+
+    private static List<SecretFinding> collapse(List<SecretFinding> in) {
+        // JWT_TOKEN_001 severity follows the token's role claim (unless an upgrade already set it higher)
+        List<SecretFinding> graded = new ArrayList<>(in.size());
+        for (SecretFinding f : in) {
+            if ("JWT_TOKEN_001".equals(f.ruleId())) {
+                String s = jwtSeverity(f.matchedValue(), f.severity());
+                if (!s.equals(f.severity()) && (sevRank(s) > sevRank(f.severity()) || "INFORMATION".equals(s))) f = f.withSeverity(s);
+            }
+            graded.add(f);
+        }
+        in = graded;
+        if (in.size() < 2) return in;
+        // 1. same value, same response (request and response kept apart)
+        Map<String, List<SecretFinding>> byValue = new LinkedHashMap<>();
+        for (SecretFinding f : in) {
+            String key = scopeOf(f) + "\0" + baseUrl(f.sourceUrl()) + "\0"
+                    + com.secretscanner.core.IssueRegistry.normalize(f.matchedValue());
+            byValue.computeIfAbsent(key, k -> new ArrayList<>()).add(f);
+        }
+        List<SecretFinding> one = new ArrayList<>(byValue.size());
+        for (List<SecretFinding> g : byValue.values()) one.add(g.size() == 1 ? g.get(0) : pickRepresentative(g));
+
+        // 2. mass exposure: many distinct values under the same rule + key in one response
+        Map<String, List<SecretFinding>> byKey = new LinkedHashMap<>();
+        for (SecretFinding f : one) {
+            String key = scopeOf(f) + "\0" + baseUrl(f.sourceUrl()) + "\0" + f.ruleId() + "\0"
+                    + (f.keyName() == null ? "" : f.keyName().toLowerCase(java.util.Locale.ROOT));
+            byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(f);
+        }
+        List<SecretFinding> out = new ArrayList<>(one.size());
+        for (List<SecretFinding> g : byKey.values()) {
+            if (g.size() <= MASS_EXPOSURE_THRESHOLD) { out.addAll(g); continue; }
+            SecretFinding first = g.get(0);
+            String note = "[" + g.size() + " distinct values under '" + first.keyName()
+                    + "' in this response; first shown] ";
+            out.add(new SecretFinding(first.ruleId(), first.ruleName(), first.keyName(), first.matchedValue(),
+                    maxSeverity(g), first.confidence(), first.lineNumber(),
+                    note + (first.context() == null ? "" : first.context()),
+                    first.sourceUrl(), first.targetUrl(), first.matchOffset(), first.meta()));
+        }
+        return out;
+    }
+
+    private static String scopeOf(SecretFinding f) {
+        String u = f.sourceUrl() == null ? "" : f.sourceUrl();
+        return (f.ruleId().startsWith("REQ_HEADER") || u.contains(" [req")) ? "REQ" : "RESP";
+    }
+
+    private static String baseUrl(String url) {
+        if (url == null) return "";
+        String u = url.replaceAll(" \\[(?:req|req-headers|REQ-HEADERS|REQ-BODY)\\]$", "");
+        return SUBSCAN_SUFFIX.matcher(u).replaceAll("");
+    }
+
+    /** 0 = vendor/specific rule ... higher = more generic. */
+    private static int specificity(String ruleId) {
+        if (ruleId.startsWith("CUSTOM_"))        return 1;
+        if (ruleId.startsWith("REQ_HEADER"))     return 2;
+        switch (ruleId) {
+            case "GENERIC_KV":                   return 3;
+            case "JSON_WALK":                    return 4;
+            case "GETTER_FUNC":                  return 5;
+            case "ENTROPY_TOKEN":                return 6;
+            case "BASE64_ENCODED_VALUE":
+            case "COMMENTED_GUID":               return 7;
+            default:                             return 0;
+        }
+    }
+
+    private static int sevRank(String sev) {
+        if (sev == null) return 0;
+        switch (sev.toUpperCase(java.util.Locale.ROOT)) {
+            case "CRITICAL": return 5;
+            case "HIGH":     return 4;
+            case "MEDIUM":   return 3;
+            case "LOW":      return 2;
+            case "INFORMATION": return 1;
+            default:         return 0;
+        }
+    }
+
+    private static String maxSeverity(List<SecretFinding> g) {
+        SecretFinding best = g.get(0);
+        for (SecretFinding f : g) if (sevRank(f.severity()) > sevRank(best.severity())) best = f;
+        return best.severity();
+    }
+
+    /** Anchored rules that recognise a token shape shared by many vendors. */
+    private static final Set<String> SHAPE_ONLY_RULES = Set.of("JWT_TOKEN_001", "GUID_TOKEN_001");
+
+    /**
+     * Among vendor rules that matched the same value, the best one: a vendor-specific rule over a
+     * shape-only one (JWT, GUID); then the rule whose vendor is named near the value (Paystack vs
+     * Stripe for sk_live_..., Clerk vs Stripe); then the most severe.
+     */
+    private static int vendorRank(SecretFinding f) {
+        int rank = SHAPE_ONLY_RULES.contains(f.ruleId()) ? 100 : 0;
+        String vendor = f.ruleName() == null ? "" : f.ruleName().split("[\\s/(]+")[0].toLowerCase(java.util.Locale.ROOT);
+        String ctx = f.context() == null ? "" : f.context().toLowerCase(java.util.Locale.ROOT);
+        if (vendor.length() < 3 || !ctx.contains(vendor)) rank += 10;
+        return rank - sevRank(f.severity());
+    }
+
+    private static SecretFinding pickRepresentative(List<SecretFinding> g) {
+        SecretFinding vendor = null;
+        for (SecretFinding f : g) {
+            if (specificity(f.ruleId()) != 0) continue;
+            if (vendor == null || vendorRank(f) < vendorRank(vendor)) vendor = f;
+        }
+        if (vendor != null) return vendor;
+        SecretFinding best = g.get(0);
+        for (SecretFinding f : g) {
+            int c = Integer.compare(sevRank(f.severity()), sevRank(best.severity()));
+            if (c > 0 || (c == 0 && specificity(f.ruleId()) < specificity(best.ruleId()))) best = f;
+        }
+        return best;
     }
 
     // =========================================================================
@@ -2842,9 +3705,7 @@ public class SecretScanner {
     public static List<String> extractInlineScripts(String html) {
         if (html == null || html.isBlank()) return List.of();
         List<String> blocks = new ArrayList<>();
-        Matcher m = Patterns.INLINE_SCRIPT.matcher(html);
-        while (m.find()) {
-            String body = m.group(1);
+        for (String body : com.secretscanner.core.ScriptBlocks.inline(html)) {
             if (body != null && !body.isBlank() && body.length() > 20) {
                 blocks.add(body);
             }
@@ -2860,9 +3721,9 @@ public class SecretScanner {
         if (html == null || html.isBlank()) return List.of();
         List<String> urls = new ArrayList<>();
         Set<String>  seen = new HashSet<>();
-        Matcher m = Patterns.SCRIPT_SRC.matcher(html);
+        Matcher m = Patterns.SCRIPT_SRC.matcher(budgeted(html));
         while (m.find()) {
-            String src = m.group(1);
+            String src = m.group(1) != null ? m.group(1) : m.group(2);   // quoted or unquoted src
             if (src == null || src.isBlank()) continue;
             String abs = resolveUrl(baseUrl, src);
             if (abs != null && seen.add(abs)) urls.add(abs);
@@ -2881,7 +3742,7 @@ public class SecretScanner {
         if (html == null || html.isBlank()) return List.of();
         List<String> urls = new ArrayList<>();
         Set<String>  seen = new HashSet<>();
-        Matcher m = Patterns.FRAME_SRC.matcher(html);
+        Matcher m = Patterns.FRAME_SRC.matcher(budgeted(html));
         while (m.find()) {
             String src = m.group(1);
             if (src == null || src.isBlank()) continue;
@@ -2903,14 +3764,14 @@ public class SecretScanner {
         if (html == null || html.isBlank()) return List.of();
         List<String> urls = new ArrayList<>();
         Set<String>  seen = new HashSet<>();
-        Matcher m = Patterns.JS_REDIRECT.matcher(html);
+        Matcher m = Patterns.JS_REDIRECT.matcher(budgeted(html));
         while (m.find()) {
             String raw = m.group(1);
             if (raw == null || raw.isBlank()) continue;
             String abs = resolveUrl(baseUrl, raw);
             if (abs != null && seen.add(abs)) urls.add(abs);
         }
-        Matcher m2 = Patterns.META_REFRESH.matcher(html);
+        Matcher m2 = Patterns.META_REFRESH.matcher(budgeted(html));
         while (m2.find()) {
             String raw = m2.group(1).trim();
             if (raw.isBlank()) continue;
@@ -2919,7 +3780,7 @@ public class SecretScanner {
         }
         // Handle: location.href = 'https://' + location.hostname + '/path'
         // Extract the path and resolve it against the same host as baseUrl.
-        Matcher m3 = Patterns.JS_REDIRECT_HOSTNAME.matcher(html);
+        Matcher m3 = Patterns.JS_REDIRECT_HOSTNAME.matcher(budgeted(html));
         while (m3.find()) {
             String path = m3.group(1);
             if (path == null || path.isBlank()) continue;
@@ -2933,16 +3794,43 @@ public class SecretScanner {
      * Scans a JS bundle for webpack / Next.js chunk file references and returns
      * resolved absolute URLs. Depth-1 chunk following.
      */
+    /** Most chunk URLs followed from one JS file (keeps a huge bundle from fanning out into thousands of fetches). */
+    static final int MAX_CHUNKS_PER_FILE = 300;
+
+    /** webpack runtime chunk map: {12:"3f2a1b9c",57:"..."}[e] (ids to content hashes). */
+    private static final Pattern WEBPACK_CHUNK_MAP = Pattern.compile(
+            "\\{((?:\"?\\d{1,6}\"?:\"[0-9a-f]{5,32}\",?){1,3000})\\}\\[\\w{1,3}\\]");
+    private static final Pattern MAP_ENTRY = Pattern.compile("\"?(\\d{1,6})\"?:\"([0-9a-f]{5,32})\"");
+    private static final Pattern LAST_STRING_LITERAL = Pattern.compile("[\"']([A-Za-z0-9_./\\-]{0,80})[\"'][^\"']{0,30}$");
+    private static final Pattern FIRST_JS_SUFFIX = Pattern.compile("^[^\"']{0,30}[\"']([A-Za-z0-9_.\\-]{0,40}\\.m?js)[\"']");
+
     public static List<String> extractWebpackChunkUrls(String jsContent, String baseUrl) {
         if (jsContent == null || jsContent.isBlank()) return List.of();
         List<String> urls = new ArrayList<>();
         Set<String>  seen = new HashSet<>();
-        Matcher m = Patterns.WEBPACK_CHUNK_REF.matcher(jsContent);
-        while (m.find()) {
+        Matcher m = Patterns.WEBPACK_CHUNK_REF.matcher(budgeted(jsContent));
+        while (m.find() && urls.size() < MAX_CHUNKS_PER_FILE) {
             String ref = m.group(1);
-            if (ref == null || ref.isBlank()) continue;
+            if (ref == null || ref.isBlank() || ref.contains("node_modules") || ref.startsWith("webpack:")) continue;
             String abs = resolveUrl(baseUrl, ref);
             if (abs != null && seen.add(abs)) urls.add(abs);
+        }
+        // Rebuild never-loaded lazy chunks from the webpack runtime chunk map:
+        //   "static/js/" + e + "." + {12:"3f2a1b9c"}[e] + ".chunk.js"  ->  static/js/12.3f2a1b9c.chunk.js
+        Matcher cm = WEBPACK_CHUNK_MAP.matcher(budgeted(jsContent));
+        while (cm.find() && urls.size() < MAX_CHUNKS_PER_FILE) {
+            Matcher pre = LAST_STRING_LITERAL.matcher(jsContent.substring(Math.max(0, cm.start() - 120), cm.start()));
+            Matcher suf = FIRST_JS_SUFFIX.matcher(jsContent.substring(cm.end(), Math.min(jsContent.length(), cm.end() + 60)));
+            if (!suf.find()) continue;
+            String prefix = pre.find() ? pre.group(1) : "";
+            if (prefix.equals(".")) prefix = "";
+            String sep = prefix.isEmpty() || prefix.endsWith("/") ? "" : ".";
+            Matcher em = MAP_ENTRY.matcher(cm.group(1));
+            while (em.find() && urls.size() < MAX_CHUNKS_PER_FILE) {
+                String file = prefix + sep + em.group(1) + "." + em.group(2) + suf.group(1);
+                String abs = resolveUrl(baseUrl, file);
+                if (abs != null && seen.add(abs)) urls.add(abs);
+            }
         }
         return urls;
     }
@@ -2956,7 +3844,7 @@ public class SecretScanner {
         if (html == null || html.isBlank()) return List.of();
         List<String> urls = new ArrayList<>();
         Set<String>  seen = new HashSet<>();
-        Matcher m = Patterns.PRELOAD_JS_LINK.matcher(html);
+        Matcher m = Patterns.PRELOAD_JS_LINK.matcher(budgeted(html));
         while (m.find()) {
             String src = m.group(1);
             if (src == null || src.isBlank()) continue;
@@ -2976,9 +3864,10 @@ public class SecretScanner {
         List<String> urls = new ArrayList<>();
         Set<String>  seen = new HashSet<>();
         // Match quoted values that end in .js (handles CRA, Next, Vite manifest formats)
+        // absolute (/static/js/x.js) or relative (assets/index-abc.js, as Vite writes them) paths
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(
-                "[\"'](/[^\"'*$?\\s]*?\\.(?:chunk\\.js|bundle\\.js|min\\.js|js))[\"']"
-        ).matcher(manifestBody);
+                "[\"']((?:\\.?/)?[^\"'*$?\\s:]*?\\.m?js)[\"']"
+        ).matcher(budgeted(manifestBody));
         while (m.find()) {
             String path = m.group(1);
             if (path == null || path.isBlank()) continue;
@@ -3012,19 +3901,42 @@ public class SecretScanner {
      * Handles AWS Secret Access Key, Azure DevOps PAT, Snowflake, Jira, Salesforce.
      */
     private List<SecretFinding> scanContextGatedRules(String text, String url) {
+        return scanContextGatedRules(text, url, null);
+    }
+
+    private List<SecretFinding> scanContextGatedRules(String text, String url, List<DebugEntry> dbg) {
         List<SecretFinding> findings = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        for (Patterns.CtxRule rule : Patterns.CONTEXT_GATED_RULES) {
-            Matcher m = rule.pattern().matcher(text);
+        BitSet candidates = Patterns.CONTEXT_PREFILTER.candidates(text);   // see scanAnchoredTokens
+        for (int ri = 0; ri < Patterns.CONTEXT_GATED_RULES.size(); ri++) {
+            if (!candidates.get(ri)) continue;
+            Patterns.CtxRule rule = Patterns.CONTEXT_GATED_RULES.get(ri);
+            Matcher m = rule.pattern().matcher(budgeted(text));
             while (m.find()) {
                 String val = m.group(rule.captureGroup());
                 if (val == null || val.isBlank() || val.length() < 8) continue;
-                if (isPlaceholder(val)) continue;
+                if (isPlaceholder(val)) {
+                    dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "placeholder", url));
+                    continue;
+                }
                 // ALGOLIA_KEY_001: real Algolia App IDs are always UPPERCASE alphanumeric
                 // (e.g. JRFR1I7G8S).  The (?i) flag on the pattern makes the [A-Z0-9]{10}
                 // capture group also match lowercase — causing JavaScript function/variable
                 // names like "autocomple" (first 10 chars of "autocomplete") to fire.
-                if ("ALGOLIA_KEY_001".equals(rule.ruleId()) && !val.equals(val.toUpperCase())) continue;
+                if ("ALGOLIA_KEY_001".equals(rule.ruleId()) && !val.equals(val.toUpperCase())) {
+                    dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "algolia_lowercase_guard", url));
+                    continue;
+                }
+                // GUID_TOKEN_001: Adobe Target "propertyToken" and similar platform-config UUIDs are
+                // public deployment identifiers. Signal: the key contains "property".
+                if ("GUID_TOKEN_001".equals(rule.ruleId())) {
+                    String keyGrp;
+                    try { keyGrp = m.group("key"); } catch (IllegalArgumentException e) { keyGrp = null; }
+                    if (keyGrp != null && keyGrp.toLowerCase().contains("property")) {
+                        dbgAdd(dbg, new DebugEntry(rule.ruleId(), rule.keyName(), dbgVal(val), "guid_property_token", url));
+                        continue;
+                    }
+                }
                 String dedupe = rule.ruleId() + ":" + val;
                 if (!seen.add(dedupe)) continue;
                 int    line    = countLines(text, m.start());
@@ -3056,12 +3968,32 @@ public class SecretScanner {
     // Text utilities
     // =========================================================================
 
+    /** Line-start offsets of the most recently indexed text, per thread (one scan = one body). */
+    private static final ThreadLocal<Object[]> LINE_INDEX = new ThreadLocal<>();
+
+    private static int[] lineStarts(String text) {
+        Object[] cached = LINE_INDEX.get();
+        if (cached != null && cached[0] == text) return (int[]) cached[1];
+        int n = 1;
+        for (int i = 0; i < text.length(); i++) if (text.charAt(i) == '\n') n++;
+        int[] starts = new int[n];
+        int k = 1;
+        for (int i = 0; i < text.length(); i++) if (text.charAt(i) == '\n') starts[k++] = i + 1;
+        LINE_INDEX.set(new Object[]{text, starts});
+        return starts;
+    }
+
+    /** 1-based line of {@code offset}; binary search over a per-text line index (was a rescan per call). */
     private static int countLines(String text, int offset) {
-        int count = 1;
-        int limit = Math.min(offset, text.length());
-        for (int i = 0; i < limit; i++)
-            if (text.charAt(i) == '\n') count++;
-        return count;
+        int limit = Math.min(Math.max(offset, 0), text.length());
+        if (text.length() < 4096) {                     // small bodies: a scan is cheaper than an index
+            int count = 1;
+            for (int i = 0; i < limit; i++) if (text.charAt(i) == '\n') count++;
+            return count;
+        }
+        int[] starts = lineStarts(text);
+        int idx = java.util.Arrays.binarySearch(starts, limit);
+        return idx >= 0 ? idx + 1 : -idx - 1;
     }
 
     private static String extractContext(String text, int start, int end) {
@@ -3098,7 +4030,7 @@ public class SecretScanner {
         Set<String> seenPass   = new HashSet<>();
 
         // Full match: both ciphertext (group 1) and passphrase (group 2) are string literals
-        Matcher m = Patterns.CRYPTOJS_AES_FULL.matcher(text);
+        Matcher m = Patterns.CRYPTOJS_AES_FULL.matcher(budgeted(text));
         while (m.find()) {
             String ciphertext  = m.group(1);
             String passphrase  = m.group(2);
@@ -3120,7 +4052,7 @@ public class SecretScanner {
         }
 
         // Fallback: first arg is a variable — only passphrase is a string literal
-        Matcher m2 = Patterns.CRYPTOJS_AES_PASSPHRASE_ONLY.matcher(text);
+        Matcher m2 = Patterns.CRYPTOJS_AES_PASSPHRASE_ONLY.matcher(budgeted(text));
         while (m2.find()) {
             String passphrase = m2.group(1);
             if (passphrase == null || passphrase.isBlank()) continue;
@@ -3136,7 +4068,7 @@ public class SecretScanner {
 
         // E4a — CryptoJS.HmacSHA256/SHA512/etc with hardcoded key
         Set<String> seenHmac = new HashSet<>();
-        Matcher mHmac = Patterns.CRYPTOJS_HMAC.matcher(text);
+        Matcher mHmac = Patterns.CRYPTOJS_HMAC.matcher(budgeted(text));
         while (mHmac.find()) {
             String key = mHmac.group(1);
             if (key == null || key.isBlank() || isPlaceholder(key)) continue;
@@ -3152,7 +4084,7 @@ public class SecretScanner {
         // E4b — CryptoJS.enc.Hex.parse("...") / CryptoJS.enc.Base64.parse("...")
         // These pass raw key material to CryptoJS instead of a passphrase string.
         Set<String> seenParse = new HashSet<>();
-        Matcher mParse = Patterns.CRYPTOJS_ENC_PARSE.matcher(text);
+        Matcher mParse = Patterns.CRYPTOJS_ENC_PARSE.matcher(budgeted(text));
         while (mParse.find()) {
             String key = mParse.group(1);
             if (key == null || key.isBlank() || isPlaceholder(key)) continue;
@@ -3166,7 +4098,7 @@ public class SecretScanner {
 
         // E1 — jwt.sign / jsonwebtoken.sign with hardcoded secret
         Set<String> seenJwt = new HashSet<>();
-        Matcher mJwt = Patterns.JWT_SIGN_SECRET.matcher(text);
+        Matcher mJwt = Patterns.JWT_SIGN_SECRET.matcher(budgeted(text));
         while (mJwt.find()) {
             String secret = mJwt.group(1);
             if (secret == null || secret.isBlank() || isPlaceholder(secret)) continue;
@@ -3181,7 +4113,7 @@ public class SecretScanner {
 
         // E2 — process.env.X || "fallback" hardcoded default
         Set<String> seenFallback = new HashSet<>();
-        Matcher mFallback = Patterns.ENV_FALLBACK.matcher(text);
+        Matcher mFallback = Patterns.ENV_FALLBACK.matcher(budgeted(text));
         while (mFallback.find()) {
             String fallback = mFallback.group(1);
             if (fallback == null || fallback.isBlank() || isPlaceholder(fallback)) continue;
@@ -3196,7 +4128,7 @@ public class SecretScanner {
 
         // E3 — crypto.createCipheriv / createDecipheriv with hardcoded key
         Set<String> seenCipheriv = new HashSet<>();
-        Matcher mCipher = Patterns.CRYPTO_CIPHERIV.matcher(text);
+        Matcher mCipher = Patterns.CRYPTO_CIPHERIV.matcher(budgeted(text));
         while (mCipher.find()) {
             String key = mCipher.group(1);
             if (key == null || key.isBlank() || isPlaceholder(key)) continue;
@@ -3223,9 +4155,15 @@ public class SecretScanner {
             java.util.regex.Matcher gm = guidPat.matcher(lines[i]);
             if (!gm.find()) continue;
             String guid = gm.group(1);
-            // Look back up to 3 lines for the nearest non-comment line with a key name
             String inferredKey = null;
-            for (int j = i - 1; j >= Math.max(0, i - 3); j--) {
+            // Same line first: "ClientSecret": "",  // "6f1c..." — the last key before the comment
+            java.util.regex.Matcher same = keyPat.matcher(lines[i].substring(0, gm.start()));
+            while (same.find()) {
+                String candidate = same.group(1) != null ? same.group(1) : same.group(2);
+                inferredKey = (candidate != null && isAzureCredentialKey(candidate)) ? candidate : null;
+            }
+            // Otherwise look back up to 3 lines for the nearest non-comment line with a key name
+            for (int j = i - 1; inferredKey == null && j >= Math.max(0, i - 3); j--) {
                 String prev = lines[j].trim();
                 if (prev.isEmpty() || prev.startsWith("//") || prev.startsWith("*") || prev.startsWith("/*")) continue;
                 java.util.regex.Matcher km = keyPat.matcher(prev);
@@ -3286,15 +4224,10 @@ public class SecretScanner {
         // hangs when decoded and searched for keywords.
         java.util.regex.Pattern b64Pat = java.util.regex.Pattern.compile(
                 "(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{40,8000}={0,2})(?![A-Za-z0-9+/=])");
-        // Sensitive keywords to find in decoded plaintext (lowercase comparison)
-        List<String> sensitiveWords = List.of(
-                "password", "passwd", "secret", "credential", "api_key", "apikey",
-                "api key", "private key", "access key", "token", "auth",
-                "environment", ".env", "config", "connection string", "private",
-                "subscription", "bearer", "passphrase", "encrypt", "decrypt");
+        // Sensitive words in the decoded plaintext, as whole words ("author" is not "auth")
         java.util.Base64.Decoder decoder = java.util.Base64.getDecoder();
         Set<String> seen = new HashSet<>();
-        Matcher m = b64Pat.matcher(text);
+        Matcher m = b64Pat.matcher(budgeted(text));
         while (m.find()) {
             String raw = m.group(1);
             // Hard cap: skip blobs larger than 8 000 chars regardless of pattern match
@@ -3303,9 +4236,9 @@ public class SecretScanner {
             int preStart = Math.max(0, m.start() - 8);
             String pre8 = text.substring(preStart, m.start()).toLowerCase();
             if (pre8.contains("sha256-") || pre8.contains("sha384-") || pre8.contains("sha512-")) continue;
-            // Skip data URIs
-            String pre20 = text.substring(Math.max(0, m.start() - 20), m.start()).toLowerCase();
-            if (pre20.contains("data:")) continue;
+            // Skip data URIs (data:<mime>;base64, — MIME types can be long: image/svg+xml, application/font-woff2)
+            String preData = text.substring(Math.max(0, m.start() - 120), m.start());
+            if (DATA_URI_PREFIX.matcher(preData).find()) continue;
             // Skip JWTs — three-segment base64url starting with "ey"
             if (raw.startsWith("ey") && raw.contains(".")) continue;
             // Deduplicate
@@ -3330,12 +4263,7 @@ public class SecretScanner {
                     .count();
             if (nonPrintable > plain.length() * 0.10) continue;
             // Check decoded text for sensitive keywords
-            String plainLower = plain.toLowerCase();
-            String matchedWord = null;
-            for (String kw : sensitiveWords) {
-                if (plainLower.contains(kw)) { matchedWord = kw; break; }
-            }
-            if (matchedWord == null) continue;
+            if (!B64_SENSITIVE_WORD.matcher(plain).find()) continue;
             // Infer key name from surrounding text (KEY:"VALUE" or KEY=VALUE)
             String keyName = "base64_encoded_value";
             java.util.regex.Matcher keyM = java.util.regex.Pattern.compile(
@@ -3347,6 +4275,18 @@ public class SecretScanner {
             // Annotate context with decoded snippet (first 80 chars)
             String decodedSnippet = plain.length() > 80 ? plain.substring(0, 77) + "..." : plain;
             String enrichedCtx = ctx + " [decoded: " + decodedSnippet.replace("\n", " ") + "]";
+            // Rescan the decoded text with the vendor rules and the key/value scanner: a vendor
+            // token or key=value secret inside the blob is reported as itself, marked as decoded.
+            List<SecretFinding> inner = new ArrayList<>(scanAnchoredTokens(plain, url + "::b64"));
+            inner.addAll(scanGenericKV(plain, url + "::b64"));
+            com.secretscanner.core.FindingMeta decodedMeta =
+                    com.secretscanner.core.FindingMeta.EMPTY.withDecodeChain(List.of("base64"));
+            for (SecretFinding f : inner) {
+                findings.add(new SecretFinding(f.ruleId(), f.ruleName(), f.keyName(), f.matchedValue(),
+                        f.severity(), f.confidence(), line, "[base64-decoded] " + enrichedCtx,
+                        url, f.targetUrl(), m.start(), decodedMeta));
+            }
+            if (!inner.isEmpty()) continue;
             findings.add(SecretFinding.of(
                     "BASE64_ENCODED_VALUE", "Base64-Encoded Sensitive Value",
                     keyName, raw, "MEDIUM", "FIRM", line, enrichedCtx, url));
@@ -3354,14 +4294,28 @@ public class SecretScanner {
         return findings;
     }
 
+    private static final Pattern DATA_URI_PREFIX = Pattern.compile("(?i)data:[^,\"'\\s]{0,100};base64,\\s*$");
+    private static final Pattern B64_SENSITIVE_WORD = Pattern.compile(
+            "(?i)\\b(?:password|passwd|secret|credentials?|api[_ -]?key|private[_ ]key|access[_ ]key|access[_ ]?token|"
+            + "auth[_ ]?token|authorization|bearer|passphrase|connection[_ ]?string|client[_ ]?secret|subscription[_ ]?key)\\b");
+
     /** Extract ±lineRadius lines around the character at {@code offset}. */
     private static String extractWindow(String text, int offset, int lineRadius) {
-        String[] lines  = text.split("\n", -1);
-        int      lineNo = countLines(text, offset) - 1;
-        int      from   = Math.max(0, lineNo - lineRadius);
-        int      to     = Math.min(lines.length - 1, lineNo + lineRadius);
-        StringBuilder sb = new StringBuilder();
-        for (int i = from; i <= to; i++) sb.append(lines[i]).append('\n');
-        return sb.toString();
+        // Walk outwards from the offset instead of splitting the whole body for every match
+        int start = Math.min(Math.max(offset, 0), text.length());
+        for (int i = 0; i <= lineRadius && start > 0; i++) {
+            int prev = text.lastIndexOf('\n', start - 1);
+            start = prev < 0 ? 0 : (i == lineRadius ? prev + 1 : prev);
+            if (prev < 0) break;
+        }
+        if (start > 0 && text.charAt(start) == '\n') start++;
+        int end = Math.min(Math.max(offset, 0), text.length());
+        for (int i = 0; i <= lineRadius; i++) {
+            int next = text.indexOf('\n', end);
+            if (next < 0) { end = text.length(); break; }
+            end = next + 1;
+        }
+        String w = text.substring(start, end);
+        return w.endsWith("\n") ? w : w + "\n";
     }
 }

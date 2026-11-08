@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- InsecureShield Portal Sitemap — generated 2024-12-01 -->
+<!-- Internal crawler auth: https://crawler.acme-portal.internal/api/index?api_key=crawler-svc-key-4f2a8b1c9d3e7f0a&env=prod -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+        <loc>https://portal.acme-portal.com/</loc>
+        <lastmod>2024-12-01</lastmod>
+        <changefreq>monthly</changefreq>
+        <priority>1.0</priority>
+    </url>
+    <url>
+        <loc>https://portal.acme-portal.com/dashboard.html</loc>
+        <lastmod>2024-12-01</lastmod>
+        <changefreq>weekly</changefreq>
+        <priority>0.9</priority>
+    </url>
+    <!-- Internal reporting endpoint (should not be publicly listed)
+         https://reporting.acme-portal.internal/api/export?token=rpt-token-8e7d6c5b4a3f2e1d&format=csv
+    -->
+    <url>
+        <loc>https://portal.acme-portal.com/api/policies</loc>
+        <lastmod>2024-12-01</lastmod>
+        <changefreq>daily</changefreq>
+        <priority>0.7</priority>
+    </url>
+</urlset>

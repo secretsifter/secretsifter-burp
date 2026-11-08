@@ -37,10 +37,14 @@ public final class ScopeMonitor {
     public static void setListener(Listener l) { listener = l; }
 
     public static void addWatchedUrl(String rawUrl) {
-        String host = extractHost(rawUrl);
+        if (rawUrl == null || rawUrl.isBlank()) return;
+        String url = rawUrl.trim();
+        // "example.com/app" (no scheme) is a host plus path, not a host
+        if (!url.matches("(?i)^[a-z][a-z0-9+.\\-]*://.*")) url = "https://" + url;
+        String host = extractHost(url);
         if (host != null) watchedHosts.add(host.toLowerCase());
-        // Also store the raw URL prefix for path-level matching
-        if (rawUrl != null && !rawUrl.isBlank()) watchedHosts.add(rawUrl.toLowerCase());
+        // Also store the URL prefix (scheme-less, lower-case) for path-level matching
+        watchedHosts.add(stripScheme(url.toLowerCase()));
     }
 
     public static void clearWatched() { watchedHosts.clear(); }
@@ -55,11 +59,31 @@ public final class ScopeMonitor {
         if (url == null || url.isBlank()) return false;
         String host = extractHost(url);
         if (host == null) return false;
-        String h = host.toLowerCase();
+        return matchesWatched(host.toLowerCase(), url);
+    }
+
+    /**
+     * Host equal to a watched host, or URL under a watched path prefix on a path boundary:
+     * a watched "example.com" must not match "example.com.evil.net" or "example.community".
+     */
+    private static boolean matchesWatched(String host, String url) {
+        String u = stripScheme(url.toLowerCase());
         for (String watched : watchedHosts) {
-            if (h.equals(watched) || url.toLowerCase().startsWith(watched)) return true;
+            if (host.equals(watched)) return true;
+            if (watched.contains("/") || watched.contains(":")) {
+                if (u.startsWith(watched)) {
+                    if (u.length() == watched.length() || watched.endsWith("/")) return true;
+                    char next = u.charAt(watched.length());
+                    if (next == '/' || next == '?' || next == '#') return true;
+                }
+            }
         }
         return false;
+    }
+
+    private static String stripScheme(String url) {
+        int i = url.indexOf("://");
+        return i >= 0 ? url.substring(i + 3) : url;
     }
 
     /**
@@ -69,16 +93,7 @@ public final class ScopeMonitor {
     public static void notify(SecretFinding finding, String url) {
         if (!active || listener == null || url == null) return;
         String host = extractHost(url);
-        boolean matches = false;
-        if (host != null) {
-            String h = host.toLowerCase();
-            for (String watched : watchedHosts) {
-                if (h.equals(watched) || url.toLowerCase().startsWith(watched)) {
-                    matches = true;
-                    break;
-                }
-            }
-        }
+        boolean matches = host != null && matchesWatched(host.toLowerCase(), url);
         if (matches) {
             listener.onPassiveFinding(finding, url);
         }
