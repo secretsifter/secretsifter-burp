@@ -2,15 +2,7 @@ package com.secretscanner;
 
 import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
-import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.scanner.scancheck.ScanCheckType;
-
-import javax.swing.JTabbedPane;
-import javax.swing.SwingUtilities;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * SecretSifter — Burp Suite Extension (Montoya API)
@@ -19,8 +11,9 @@ import java.util.Map;
  * Designed for BApp Store submission.
  *
  * Features:
- *   - Passive scanning of all proxy traffic (217 detection rules: anchored vendor tokens, entropy, KV,
- *     URL creds, DB connection strings, SSR state blobs, JSON walking, PII)
+ *   - Passive secret detection via a registered PassiveScanCheck (217 detection rules: anchored
+ *     vendor tokens, entropy, KV, URL creds, DB connection strings, SSR state blobs, JSON walking, PII).
+ *     Burp drives the check for every in-scope exchange it audits; detection never runs on its own.
  *     Includes HTML inline script extraction (scans secrets in <script> tags)
  *   - Active rescan via right-click context menu with Save HTML Report option
  *   - Bulk Scan tab: paste/import 100+ URLs, script-src following, webpack
@@ -50,77 +43,41 @@ public class SecretScannerExtension implements BurpExtension {
             api.logging().logToOutput("[*] Scanner API unavailable (Community Edition) — passive scan check skipped.");
         }
 
-        // 3b. Proxy handler
-        SecretProxyHandler proxyHandler = new SecretProxyHandler(scanner, settings, api);
-        api.proxy().registerResponseHandler(proxyHandler);
+        // 3b. All HTTP secret detection runs exclusively through SecretScanCheck.doCheck()
+        //     (registered above). There is deliberately no proxy-level response handler and no
+        //     background site-map sweep: the extension never scans traffic the user has not
+        //     submitted to Burp's scanner. Existing site-map entries are (re)scanned only on
+        //     demand — via the Bulk Scan tab or the right-click "Rescan for Secrets" action.
 
         // 4. Context menu
         SecretContextMenu contextMenu = new SecretContextMenu(scanner, settings, api);
         api.userInterface().registerContextMenuItemsProvider(contextMenu);
 
         // 4b. Inline response tab
-        api.userInterface().registerHttpResponseEditorProvider(new SecretSifterTab(scanner));
+        api.userInterface().registerHttpResponseEditorProvider(new SecretSifterTab(scanner, api.logging()));
 
-        // 5. UI panels
+        // 5. UI panels.
+        //    Configuration is registered in Burp's native Settings dialog (registerSettingsPanel),
+        //    keeping the suite tab focused on operational content — the Bulk Scan dashboard.
         SettingsPanel settingsPanel = new SettingsPanel(settings, api);
-        BulkScanPanel bulkPanel    = new BulkScanPanel(scanner, settings, api);
+        BulkScanPanel bulkPanel     = new BulkScanPanel(scanner, settings, api);
 
-        JTabbedPane tabPane = new JTabbedPane();
-        tabPane.addTab("Bulk Scan", bulkPanel.getPanel());
-        tabPane.addTab("Settings",  settingsPanel.getPanel());
-        api.userInterface().registerSuiteTab("Secret Sifter", tabPane);
+        api.userInterface().registerSettingsPanel(settingsPanel);
+        api.userInterface().registerSuiteTab("Secret Sifter", bulkPanel.getPanel());
 
         // 6. Load persisted settings
         settingsPanel.loadFromPreferences();
         bulkPanel.syncFromSettings();
-        bulkPanel.syncHttpClient();
 
-        api.logging().logToOutput("[*] Loaded:\tSecretSifter v1.0.1 (Store)");
+        api.logging().logToOutput("[*] Loaded:\tSecretSifter v1.0.6 (Store)");
         api.logging().logToOutput("[*] Author:\tHemanth Gorijala");
         api.logging().logToOutput("[*] Config:\tTier=" + settings.getTier() +
                 "  Entropy≥" + settings.getEntropyThreshold() +
                 "  PII=" + settings.isPiiEnabled());
 
-        // 7. Sitemap sweep
-        Thread sitemapSweep = new Thread(() -> {
-            try { Thread.sleep(1500); } catch (InterruptedException ignored) { return; }
-            if (!settings.isEnabled()) return;
-            @SuppressWarnings("unchecked")
-            List<HttpRequestResponse>[] ref = new List[]{List.of()};
-            try {
-                SwingUtilities.invokeAndWait(() -> ref[0] = api.siteMap().requestResponses());
-            } catch (Exception ignored) { return; }
-            for (HttpRequestResponse rr : ref[0]) {
-                if (!settings.isEnabled()) break;
-                if (rr == null || rr.request() == null || rr.response() == null) continue;
-                String url = rr.request().url();
-                if (url == null || settings.isExternalCdn(url)) continue;
-                int status = rr.response().statusCode();
-                if (status < 200 || status >= 400) continue;
-                String body = rr.response().bodyToString();
-                if (body == null || body.length() < 50) continue;
-                String ct = rr.response().headerValue("Content-Type");
-                try {
-                    List<SecretFinding> findings = scanner.scanText(body, ct, url);
-                    if (!findings.isEmpty()) {
-                        Map<String, List<SecretFinding>> grouped = new LinkedHashMap<>();
-                        for (SecretFinding f : findings)
-                            grouped.computeIfAbsent(f.ruleName(), k -> new ArrayList<>()).add(f);
-                        for (List<SecretFinding> group : grouped.values())
-                            if (SitemapDeduplicator.shouldAdd(group))
-                                api.siteMap().add(SecretFinding.toGroupedAuditIssue(group, rr));
-                    }
-                } catch (Exception ignored) {}
-            }
-        }, "SecretSifter-SitemapSweep");
-        sitemapSweep.setDaemon(true);
-        sitemapSweep.start();
-
-        // 8. Clean unloading
+        // 7. Clean unloading
         api.extension().registerUnloadingHandler(() -> {
             bulkPanel.shutdown();
-            sitemapSweep.interrupt();
-            proxyHandler.shutdown();
             contextMenu.shutdown();
             scanner.clearRequestDedup();
             SitemapDeduplicator.clear();

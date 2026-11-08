@@ -2,6 +2,19 @@
 
 All notable changes to SecretSifter are documented here.
 
+## [1.0.6] — 2026-11-08
+
+### Changed (BApp Store review feedback)
+- **Detection consolidated into the passive scan check.** All HTTP secret detection now runs through the registered `PassiveScanCheck` (`SecretScanCheck.doCheck()`). Removed the always-on proxy response handler and the startup site-map sweep, so the extension no longer scans traffic that was not submitted to Burp's scanner. (WebSocket text frames are still handled by the proxy WebSocket handler, as Burp exposes no passive scan check for them.)
+- **No bulk data retrieval on the Event Dispatch Thread.** Site-map and proxy-history snapshots (Scan Site Map, Rescan, and the bulk-scan index/sweeps) are now fetched on background threads, with results pushed back to the UI via `invokeLater`. Prevents UI freezes on large projects.
+- **Lower peak memory during bulk scans.** The site-map index is built once per scan, restricted to the hosts being scanned, and released as soon as the scan completes.
+- **Background failures are logged** to Extensions → Errors instead of being silently swallowed.
+- **HTTP fetches now use Burp's HTTP API.** The Bulk Scan active fetch uses `api.http().sendRequest()` instead of a custom `java.net.http.HttpClient`; the custom trust-all TLS manager has been removed and TLS is handled by Burp.
+- **Settings moved to Burp's native Settings dialog** via `registerSettingsPanel()`; the suite tab now shows only the Bulk Scan dashboard.
+
+### Removed
+- `evaluation/` research folder (not part of the extension).
+
 ## [1.0.1] — 2026-04-26
 
 ### New features

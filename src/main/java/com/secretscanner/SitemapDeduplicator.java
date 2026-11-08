@@ -6,9 +6,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Session-scoped deduplication guard for api.siteMap().add() call sites.
  *
- * Burp only calls consolidateIssues() for issues returned from passiveAudit();
- * issues injected directly via api.siteMap().add() (proxy handler, sitemap
- * sweep, bulk scan, context-menu rescan) skip that path entirely.
+ * Burp only calls consolidateIssues() for issues returned from the passive scan check;
+ * issues injected directly via api.siteMap().add() (Bulk Scan and the context-menu
+ * rescan) skip that path entirely.
  *
  * This class prevents the same (normalised URL + matched value) pair from being
  * added more than once per session, regardless of which code path or rule found
@@ -23,10 +23,6 @@ public final class SitemapDeduplicator {
     private static final char SEP = '\u0000';
 
     private static final ConcurrentHashMap<String, Boolean> seen =
-            new ConcurrentHashMap<>();
-
-    /** Separate map for proxy-handler dedup — never shared with bulk-scan dedup. */
-    private static final ConcurrentHashMap<String, Boolean> proxySeen =
             new ConcurrentHashMap<>();
 
     private SitemapDeduplicator() {}
@@ -85,37 +81,8 @@ public final class SitemapDeduplicator {
         return anyNew;
     }
 
-    /**
-     * Same logic as {@link #shouldAdd} but uses a namespace isolated from the
-     * bulk-scan dedup map.  Call this from the proxy handler so that bulk-scan
-     * processing of the same URL never blocks proxy-handler sitemap entries.
-     */
-    public static boolean shouldAddProxy(List<SecretFinding> group) {
-        if (group == null || group.isEmpty()) return false;
-        SecretFinding first = group.get(0);
-        String url = first.sourceUrl();
-        if (url != null) {
-            int h = url.indexOf('#');
-            if (h >= 0) url = url.substring(0, h);
-            int q = url.indexOf('?');
-            if (q >= 0) url = url.substring(0, q);
-            for (String suf : new String[]{" [HTML]", " [JS]", " [JSON]", " [XML]", " [REQ-HEADERS]"})
-                if (url.endsWith(suf)) { url = url.substring(0, url.length() - suf.length()); break; }
-        }
-        String normUrl = url == null ? "" : url;
-        String groupKey = '\u0001' + normUrl + SEP + first.ruleName();
-        if (proxySeen.putIfAbsent(groupKey, Boolean.TRUE) != null) return false;
-        boolean anyNew = false;
-        for (SecretFinding f : group) {
-            String key = normUrl + SEP + (f.matchedValue() == null ? "" : f.matchedValue());
-            if (proxySeen.putIfAbsent(key, Boolean.TRUE) == null) anyNew = true;
-        }
-        return anyNew;
-    }
-
     /** Clears all tracked entries — call on extension unload. */
     public static void clear() {
         seen.clear();
-        proxySeen.clear();
     }
 }

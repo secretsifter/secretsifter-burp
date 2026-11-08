@@ -21,7 +21,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Swing settings tab shown in Burp's suite-level tab bar.
+ * SecretSifter configuration surface, registered in Burp's native Settings dialog via
+ * {@link burp.api.montoya.ui.UserInterface#registerSettingsPanel} (implements
+ * {@link burp.api.montoya.ui.settings.SettingsPanel}). It is deliberately NOT a suite sub-tab —
+ * the suite tab is reserved for operational content (the Bulk Scan dashboard).
+ *
+ * The structured {@code SettingsPanelBuilder} API only offers boolean / integer / single-line
+ * string / single-choice dropdown inputs, which cannot represent this panel's decimal entropy
+ * threshold, multi-line CDN blocklist, or multi-line custom-rule editor with import/export. The
+ * base {@code SettingsPanel} interface accepts an arbitrary Swing component, so the full editor is
+ * supplied via {@link #uiComponent()}.
  *
  * Controls:
  *   - Global enable/disable toggle
@@ -31,7 +40,7 @@ import java.util.List;
  *
  * Settings are persisted to Burp's preference store on Save.
  */
-public class SettingsPanel {
+public class SettingsPanel implements burp.api.montoya.ui.settings.SettingsPanel {
 
     private static final String CUSTOM_RULES_PLACEHOLDER =
             "# Format: RuleName | regex | severity  (HIGH / MEDIUM / LOW / INFORMATION)\n" +
@@ -79,9 +88,24 @@ public class SettingsPanel {
         }
     }
 
-    /** Returns the Swing panel to register as a Burp suite tab. */
+    /** Returns the Swing panel (built once in the constructor). */
     public JComponent getPanel() {
         return rootPanel != null ? rootPanel : new JPanel();
+    }
+
+    // ---- burp.api.montoya.ui.settings.SettingsPanel ----
+
+    /** The component Burp renders in its native Settings dialog. */
+    @Override
+    public JComponent uiComponent() {
+        return getPanel();
+    }
+
+    /** Keywords for Burp's Settings search box. */
+    @Override
+    public java.util.Set<String> keywords() {
+        return java.util.Set.of("secret", "secrets", "secretsifter", "entropy",
+                "pii", "cdn", "api key", "credentials", "custom rules");
     }
 
     // =========================================================================
@@ -89,130 +113,110 @@ public class SettingsPanel {
     // =========================================================================
 
     private void buildUi() {
-        rootPanel = new JPanel(new BorderLayout(0, 6));
-        rootPanel.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+        // Single scrollable column. Burp's native Settings pane is narrower than the old suite tab,
+        // so settings stack vertically and fill the available width (no side-by-side columns and no
+        // sub-tabs), and the whole panel scrolls vertically at any dialog size.
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
-        // ── Header (above all sub-tabs, always visible) ──────────────────────
-        JPanel headerPanel = new JPanel();
-        headerPanel.setLayout(new BoxLayout(headerPanel, BoxLayout.Y_AXIS));
-        headerPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
+        JLabel intro = new JLabel("Detection settings for OWASP SecretSifter. Click \"Save Settings\" to apply.");
+        intro.setForeground(Color.GRAY);
+        intro.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(intro);
+        content.add(Box.createVerticalStrut(10));
 
-        JLabel nameLbl = new JLabel("SecretSifter");
-        nameLbl.setFont(nameLbl.getFont().deriveFont(Font.BOLD, 22f));
-        nameLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel tagLbl = new JLabel("Live Credentials & Secrets Scanner");
-        tagLbl.setFont(tagLbl.getFont().deriveFont(Font.PLAIN, 13f));
-        tagLbl.setForeground(Color.GRAY);
-        tagLbl.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        headerPanel.add(nameLbl);
-        headerPanel.add(Box.createVerticalStrut(2));
-        headerPanel.add(tagLbl);
-        rootPanel.add(headerPanel, BorderLayout.NORTH);
-
-        // ── Sub-tab pane ──────────────────────────────────────────────────────
-        JTabbedPane subTabs = new JTabbedPane();
-
-        // ═══════════════════════════════════════════════════════════════════
-        // TAB 1 — Scanner   (controls + 3 filter columns)
-        // ═══════════════════════════════════════════════════════════════════
-        JPanel scannerTab = new JPanel(new BorderLayout(4, 6));
-        scannerTab.setBorder(BorderFactory.createEmptyBorder(6, 4, 4, 4));
-
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4));
-        topPanel.setBorder(new TitledBorder("Scanner Controls"));
+        // Scanner Controls
+        JPanel controls = new JPanel(new GridBagLayout());
+        controls.setBorder(new TitledBorder("Scanner Controls"));
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.gridx = 0; gc.gridy = 0; gc.anchor = GridBagConstraints.WEST;
+        gc.weightx = 1.0; gc.fill = GridBagConstraints.NONE;
+        gc.insets = new Insets(3, 4, 3, 4);
 
         enabledBox = new ToggleSwitch("Enable passive scanning", settings.isEnabled());
-        topPanel.add(enabledBox);
+        controls.add(enabledBox, gc);
 
-        topPanel.add(new JLabel("   Entropy threshold:"));
+        gc.gridy++;
+        JPanel entropyRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        entropyRow.add(new JLabel("Entropy threshold:"));
         SpinnerNumberModel model = new SpinnerNumberModel(
                 settings.getEntropyThreshold(), 0.0, 6.0, 0.1);
         entropySpinner = new JSpinner(model);
         ((JSpinner.NumberEditor) entropySpinner.getEditor()).getFormat().setMaximumFractionDigits(1);
-        entropySpinner.setPreferredSize(new Dimension(65, 24));
+        entropySpinner.setPreferredSize(new Dimension(70, 26));
         entropySpinner.setToolTipText("Shannon entropy threshold (bits/char). Default: 3.5");
-        topPanel.add(entropySpinner);
+        entropyRow.add(entropySpinner);
+        controls.add(entropyRow, gc);
 
+        gc.gridy++;
         piiBox = new ToggleSwitch("Enable PII detection (SSN, Credit Cards)", settings.isPiiEnabled());
-        topPanel.add(piiBox);
+        controls.add(piiBox, gc);
 
+        gc.gridy++;
         scanRequestsBox = new ToggleSwitch("Scan request headers / body for secrets", settings.isScanRequestsEnabled());
         scanRequestsBox.setToolTipText(
                 "When enabled, scans outbound request headers (X-API-Key, Authorization, etc.) " +
                 "and request bodies for hardcoded vendor tokens. " +
                 "JWT Bearer tokens are automatically skipped. " +
                 "Disable to reduce noise on high-traffic proxies.");
-        topPanel.add(scanRequestsBox);
+        controls.add(scanRequestsBox, gc);
 
+        gc.gridy++;
         allowInsecureSslBox = new ToggleSwitch("Allow insecure SSL (trust all certificates)", settings.isAllowInsecureSsl());
         allowInsecureSslBox.setToolTipText(
-                "Saved for reference — SSL trust is now governed by Burp's project-level TLS settings " +
-                "(Project Options > TLS > Server TLS Certificates). " +
-                "For self-signed or internal certs, add the CA to Burp's trust store instead of enabling this option.");
-        topPanel.add(allowInsecureSslBox);
+                "Saved for reference. Fetches now use Burp's HTTP engine, so TLS trust follows Burp's " +
+                "own settings (Burp accepts self-signed / internal certificates by default).");
+        controls.add(allowInsecureSslBox, gc);
 
-        JLabel sslWarnLabel = new JLabel("  \u26a0 Disable only against trusted targets");
+        gc.gridy++;
+        JLabel sslWarnLabel = new JLabel("⚠ Disable only against trusted targets");
         sslWarnLabel.setForeground(new Color(180, 60, 0));
         sslWarnLabel.setFont(sslWarnLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        topPanel.add(sslWarnLabel);
+        controls.add(sslWarnLabel, gc);
 
-        scannerTab.add(topPanel, BorderLayout.NORTH);
+        addSection(content, controls);
 
-        // CDN blocklist
-        JPanel cdnPanel = new JPanel(new BorderLayout(4, 4));
-        cdnPanel.setBorder(new TitledBorder(
-                "CDN / Third-Party Blocklist  (one entry per line — partial host match)"));
-        cdnArea = new JTextArea(String.join("\n", settings.getCdnBlocklist()), 8, 20);
+        // CDN / Third-Party Blocklist
+        cdnArea = new JTextArea(String.join("\n", settings.getCdnBlocklist()), 6, 40);
         cdnArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         cdnArea.setToolTipText("Responses from hosts matching any of these strings are skipped.");
-        cdnPanel.add(new JScrollPane(cdnArea), BorderLayout.CENTER);
-        cdnPanel.add(makeSearchBar(cdnArea), BorderLayout.SOUTH);
+        addSection(content, titledTextArea(
+                "CDN / Third-Party Blocklist  (one entry per line, partial host match)", cdnArea));
 
         // Key Name Blocklist
-        JPanel keyBlockPanel = new JPanel(new BorderLayout(4, 4));
-        keyBlockPanel.setBorder(new TitledBorder(
-                "Key Name Blocklist  (suppress — one pattern per line, substring match)"));
-        keyBlocklistArea = new JTextArea(String.join("\n", settings.getKeyBlocklist()), 8, 20);
+        keyBlocklistArea = new JTextArea(String.join("\n", settings.getKeyBlocklist()), 6, 40);
         keyBlocklistArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         keyBlocklistArea.setToolTipText(
                 "Findings whose matched key name contains any entry here are suppressed. " +
                 "Example: add STORAGE_KEY_ to hide all localStorage constant names. " +
                 "Allowlisted keys override this list.");
-        keyBlockPanel.add(new JScrollPane(keyBlocklistArea), BorderLayout.CENTER);
-        keyBlockPanel.add(makeSearchBar(keyBlocklistArea), BorderLayout.SOUTH);
+        addSection(content, titledTextArea(
+                "Key Name Blocklist  (suppress, one pattern per line, substring match)", keyBlocklistArea));
 
         // Key Name Allowlist
-        JPanel keyAllowPanel = new JPanel(new BorderLayout(4, 4));
-        keyAllowPanel.setBorder(new TitledBorder(
-                "Key Name Allowlist  (force-report — one pattern per line, substring match)"));
-        keyAllowlistArea = new JTextArea(String.join("\n", settings.getKeyAllowlist()), 8, 20);
+        keyAllowlistArea = new JTextArea(String.join("\n", settings.getKeyAllowlist()), 6, 40);
         keyAllowlistArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         keyAllowlistArea.setToolTipText(
                 "Findings whose matched key name contains any entry here are always reported, " +
                 "even if the value fails entropy checks. " +
                 "Example: add APIM_KEY to ensure all APIM key names are captured.");
-        keyAllowPanel.add(new JScrollPane(keyAllowlistArea), BorderLayout.CENTER);
-        keyAllowPanel.add(makeSearchBar(keyAllowlistArea), BorderLayout.SOUTH);
+        addSection(content, titledTextArea(
+                "Key Name Allowlist  (force-report, one pattern per line, substring match)", keyAllowlistArea));
 
-        JPanel filterRow = new JPanel(new GridLayout(1, 3, 8, 0));
-        filterRow.add(cdnPanel);
-        filterRow.add(keyBlockPanel);
-        filterRow.add(keyAllowPanel);
-        scannerTab.add(filterRow, BorderLayout.CENTER);
+        // Custom Rules
+        JPanel customRules = new JPanel(new BorderLayout(4, 6));
+        customRules.setBorder(new TitledBorder("Custom Rules"));
 
-        subTabs.addTab("Scanner", scannerTab);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // TAB 2 — Custom Rules
-        // ═══════════════════════════════════════════════════════════════════
-        JPanel customRulesTab = new JPanel(new BorderLayout(4, 6));
-        customRulesTab.setBorder(BorderFactory.createEmptyBorder(6, 4, 4, 4));
-
-        JLabel noiseWarning = new JLabel(
-                "\u26a0  Custom regex rules run without key-name filtering and may produce noise. " +
-                "Review all findings with a CUSTOM_ rule ID carefully before reporting.");
+        // Plain JTextArea (not an HTML JLabel): Burp disables HTML rendering in Swing labels,
+        // so markup would show as literal tags. A wrapping, non-editable text area wraps reliably.
+        JTextArea noiseWarning = new JTextArea(
+                "⚠ Custom regex rules run without key-name filtering and may produce noise. "
+                + "Review all findings with a CUSTOM_ rule ID carefully before reporting.");
+        noiseWarning.setEditable(false);
+        noiseWarning.setLineWrap(true);
+        noiseWarning.setWrapStyleWord(true);
+        noiseWarning.setRows(2);
         noiseWarning.setForeground(new Color(160, 80, 0));
         noiseWarning.setFont(noiseWarning.getFont().deriveFont(Font.PLAIN, 11f));
         noiseWarning.setBorder(BorderFactory.createCompoundBorder(
@@ -220,22 +224,22 @@ public class SettingsPanel {
                 BorderFactory.createEmptyBorder(4, 8, 4, 8)));
         noiseWarning.setOpaque(true);
         noiseWarning.setBackground(new Color(255, 251, 230));
-        customRulesTab.add(noiseWarning, BorderLayout.NORTH);
+        customRules.add(noiseWarning, BorderLayout.NORTH);
 
         List<String> savedRules = settings.getCustomRules();
         customRulesArea = new JTextArea(savedRules.isEmpty()
                 ? CUSTOM_RULES_PLACEHOLDER
-                : String.join("\n", savedRules), 10, 80);
+                : String.join("\n", savedRules), 8, 40);
         customRulesArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         customRulesArea.setToolTipText(
                 "Add your own detection patterns on top of the built-in rules. " +
                 "Format: RuleName | regex | severity  (severity: HIGH / MEDIUM / LOW / INFORMATION). " +
                 "Example:  MyInternalToken | [A-Z]{3}-[0-9]{10}-[a-z]{5} | HIGH");
-        customRulesTab.add(new JScrollPane(customRulesArea), BorderLayout.CENTER);
+        customRules.add(new JScrollPane(customRulesArea), BorderLayout.CENTER);
 
         JPanel customRulesBtnBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
-        JButton importRulesBtn = new JButton("Import from file\u2026");
-        JButton exportRulesBtn = new JButton("Export to file\u2026");
+        JButton importRulesBtn = new JButton("Import from file…");
+        JButton exportRulesBtn = new JButton("Export to file…");
         importRulesBtn.addActionListener(e -> onImportCustomRules());
         exportRulesBtn.addActionListener(e -> onExportCustomRules());
         customRulesEnabledBox = new ToggleSwitch("Enable custom rules", settings.isCustomRulesEnabled());
@@ -252,16 +256,25 @@ public class SettingsPanel {
 
         JPanel customRulesBottom = new JPanel();
         customRulesBottom.setLayout(new BoxLayout(customRulesBottom, BoxLayout.Y_AXIS));
-        customRulesBottom.add(makeSearchBar(customRulesArea));
+        JPanel crSearch = makeSearchBar(customRulesArea);
+        crSearch.setAlignmentX(Component.LEFT_ALIGNMENT);
+        customRulesBtnBar.setAlignmentX(Component.LEFT_ALIGNMENT);
+        customRulesBottom.add(crSearch);
         customRulesBottom.add(customRulesBtnBar);
-        customRulesTab.add(customRulesBottom, BorderLayout.SOUTH);
+        customRules.add(customRulesBottom, BorderLayout.SOUTH);
 
-        subTabs.addTab("Custom Rules", customRulesTab);
+        addSection(content, customRules);
 
+        content.add(Box.createVerticalGlue());
 
-        rootPanel.add(subTabs, BorderLayout.CENTER);
+        JScrollPane scroll = new JScrollPane(content,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        settingsScrollPane = scroll;
 
-        // ── Save/Reset — always visible below the sub-tabs ───────────────────
+        // Save / Reset, always visible below the scroll area
         JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         JButton saveBtn  = new JButton("Save Settings");
         JButton resetBtn = new JButton("Reset to Defaults");
@@ -273,9 +286,27 @@ public class SettingsPanel {
         bottomPanel.add(resetBtn);
         bottomPanel.add(Box.createHorizontalStrut(20));
         bottomPanel.add(statusLabel);
-        rootPanel.add(bottomPanel, BorderLayout.SOUTH);
 
-        settingsScrollPane = null; // no outer scroll — each tab manages its own viewport
+        rootPanel = new JPanel(new BorderLayout(0, 6));
+        rootPanel.add(scroll, BorderLayout.CENTER);
+        rootPanel.add(bottomPanel, BorderLayout.SOUTH);
+    }
+
+    /** Adds a section to the vertical column: fills the width, does not stretch vertically. */
+    private static void addSection(JPanel column, JComponent section) {
+        section.setAlignmentX(Component.LEFT_ALIGNMENT);
+        section.setMaximumSize(new Dimension(Integer.MAX_VALUE, section.getPreferredSize().height));
+        column.add(section);
+        column.add(Box.createVerticalStrut(10));
+    }
+
+    /** Builds a titled panel wrapping a scrollable text area plus its search bar. */
+    private JPanel titledTextArea(String title, JTextArea area) {
+        JPanel p = new JPanel(new BorderLayout(4, 4));
+        p.setBorder(new TitledBorder(title));
+        p.add(new JScrollPane(area), BorderLayout.CENTER);
+        p.add(makeSearchBar(area), BorderLayout.SOUTH);
+        return p;
     }
 
 

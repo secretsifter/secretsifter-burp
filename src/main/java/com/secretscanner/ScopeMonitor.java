@@ -49,7 +49,7 @@ public final class ScopeMonitor {
 
     /**
      * Returns true if the given URL's host is in the watched-host set.
-     * Used by SecretProxyHandler to avoid scanning unrelated traffic.
+     * Used by the Bulk Scan scope monitor to avoid routing unrelated traffic.
      */
     public static boolean isWatched(String url) {
         if (url == null || url.isBlank()) return false;

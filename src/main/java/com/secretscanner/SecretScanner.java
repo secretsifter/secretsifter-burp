@@ -165,8 +165,8 @@ public class SecretScanner {
     }
 
     /**
-     * Overload called by {@link SecretProxyHandler} with eagerly extracted response body
-     * and Content-Type header.
+     * Overload that accepts an eagerly extracted response body and Content-Type header
+     * (used when the caller has already read the body off an intercepted response).
      *
      * <p>Burp's Montoya API {@code HttpRequestResponse.httpRequestResponse(req, interceptedResponse)}
      * may hold a <em>reference</em> to the live {@code InterceptedResponse} rather than copying
@@ -485,7 +485,7 @@ public class SecretScanner {
             }
             // Do NOT call filterRequestFindings() here — that method adds values to the
             // shared seenRequestValues set, which would silently suppress the same credentials
-            // from being reported later by the proxy handler (scanRequestResponse path).
+            // from being reported later by the passive scan check (scanRequestResponse path).
             // Bulk Scan is a one-shot operation; it doesn't need cross-request dedup.
             // JWT filter is already applied inline above; just add directly.
             all.addAll(hdrFindings);

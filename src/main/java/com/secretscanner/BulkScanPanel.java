@@ -199,8 +199,6 @@ public class BulkScanPanel {
         this.scanner  = scanner;
         this.settings = settings;
         this.api      = api;
-        this.HTTP_CLIENT   = buildHttpClient(settings.isAllowInsecureSsl(), 8080);
-        this.IP_HTTP_CLIENT = buildHttpClient(true, 8080);
 
         tableModel = new DefaultTableModel(COLS, 0) {
             @Override public boolean isCellEditable(int r, int c) {
@@ -872,17 +870,6 @@ public class BulkScanPanel {
         // all scan code paths (SecretScanner, processUrl, etc.) use the correct tier.
         settings.setTier(ScanSettings.ScanTier.valueOf((String) tierCombo.getSelectedItem()));
 
-        // Rebuild HTTP clients at scan start using the current proxy port from the spinner.
-        // The clients built at construction time use the hardcoded default port (8080); if
-        // the user has changed the proxy port since startup the old client routes to the wrong
-        // port and IP-address HTTPS fetches fail silently.
-        {
-            int port = (proxyPortSpinner != null) ? (int) proxyPortSpinner.getValue() : 8080;
-            HTTP_CLIENT    = buildHttpClient(settings.isAllowInsecureSsl(), port);
-            IP_HTTP_CLIENT = buildHttpClient(true, port);
-            httpClientAllowInsecureSsl = settings.isAllowInsecureSsl();
-        }
-
         paused.set(false);
         running.set(true);
         urlsDone.set(0);
@@ -890,7 +877,7 @@ public class BulkScanPanel {
         totalExpected.set(urls.size());   // seed with base URL count so bar never prematurely hits 100%
         totalDone.set(0);
         scanGeneration.incrementAndGet(); // invalidate any in-flight appendFinding callbacks from prior scan
-        ScopeMonitor.clearWatched();      // stop proxy handler re-adding findings from previous scan targets
+        ScopeMonitor.clearWatched();      // stop stale scope-monitor routing from previous scan targets
         seenUrls.clear();
         seenFindings.clear();   // reset per-scan dedup so a re-run always shows all findings fresh
         seenPositions.clear();
@@ -947,46 +934,56 @@ public class BulkScanPanel {
             // Burp Browser browsing) over the unauthenticated active-fetch body when a
             // target redirects to SSO/Entra.  No sweep is started here — the user can
             // explicitly scan the site map via the "🗺 Scan Site Map" button.
-            Set<String> watchedHosts = new HashSet<>();
-            for (String u : urls) {
-                String norm = normaliseUrl(u);
-                if (norm != null) {
-                    try { watchedHosts.add(new java.net.URL(norm).getHost().toLowerCase()); }
-                    catch (Exception ignored) {}
-                }
-            }
-            if (!watchedHosts.isEmpty()) {
-                siteMapIndex = buildSiteMapIndex();
-            }
-
-            int threads = (int) concurrencySpinner.getValue();
-            executor = Executors.newFixedThreadPool(threads, r -> {
-                Thread t = new Thread(r, "SecretSifter-Bulk");
-                t.setDaemon(true);
-                return t;
-            });
-
-            for (String url : urls) {
-                executor.submit(() -> {
-                    if (!running.get()) return;
-                    checkPause();           // wait here if the user paused; re-check below
-                    if (!running.get()) return;
-                    urlsStarted.incrementAndGet();
-                    try {
-                        processUrl(url);
-                    } catch (Exception e) {
-                        debugLog("BulkScanPanel.processUrl(" + url + "): " + e.toString());
-                    } finally {
-                        totalDone.incrementAndGet();   // count this base URL as done in the progress bar
-                        int mainDone  = urlsDone.incrementAndGet();
-                        int mainTotal = lastScanTotal;
-                        if (mainDone >= mainTotal) {
-                            SwingUtilities.invokeLater(() -> onScanComplete(mainTotal));
-                        }
+            //
+            // buildSiteMapIndex() calls api.siteMap().requestResponses(), which can take several
+            // seconds on a large Burp project, so the index build AND the worker dispatch run on a
+            // background thread — never on the Event Dispatch Thread, which would freeze Burp's UI.
+            final int threads = (int) concurrencySpinner.getValue();
+            final List<String> scanUrls = urls;
+            Thread dispatch = new Thread(() -> {
+                Set<String> watchedHosts = new HashSet<>();
+                for (String u : scanUrls) {
+                    String norm = normaliseUrl(u);
+                    if (norm != null) {
+                        try { watchedHosts.add(new java.net.URL(norm).getHost().toLowerCase()); }
+                        catch (Exception ignored) {}
                     }
+                }
+                if (!watchedHosts.isEmpty()) {
+                    siteMapIndex = buildSiteMapIndex(watchedHosts);
+                }
+                if (!running.get()) return;   // user stopped while the index was being built
+
+                executor = Executors.newFixedThreadPool(threads, r -> {
+                    Thread th = new Thread(r, "SecretSifter-Bulk");
+                    th.setDaemon(true);
+                    return th;
                 });
-            }
-            executor.shutdown();
+
+                for (String url : scanUrls) {
+                    executor.submit(() -> {
+                        if (!running.get()) return;
+                        checkPause();           // wait here if the user paused; re-check below
+                        if (!running.get()) return;
+                        urlsStarted.incrementAndGet();
+                        try {
+                            processUrl(url);
+                        } catch (Exception e) {
+                            debugLog("BulkScanPanel.processUrl(" + url + "): " + e.toString());
+                        } finally {
+                            totalDone.incrementAndGet();   // count this base URL as done in the progress bar
+                            int mainDone  = urlsDone.incrementAndGet();
+                            int mainTotal = lastScanTotal;
+                            if (mainDone >= mainTotal) {
+                                SwingUtilities.invokeLater(() -> onScanComplete(mainTotal));
+                            }
+                        }
+                    });
+                }
+                executor.shutdown();
+            }, "SecretSifter-BulkDispatch");
+            dispatch.setDaemon(true);
+            dispatch.start();
         }
     }
 
@@ -1001,7 +998,7 @@ public class BulkScanPanel {
         // Full reset — each "Scan Site Map" invocation is independent and must
         // process every matching entry from scratch.
         scanGeneration.incrementAndGet(); // invalidate any in-flight appendFinding callbacks from prior scan
-        ScopeMonitor.clearWatched();      // stop proxy handler re-adding findings from previous scan targets
+        ScopeMonitor.clearWatched();      // stop stale scope-monitor routing from previous scan targets
         seenUrls.clear();
         seenFindings.clear();          // prevent prior scan results from suppressing sitemap findings
         seenPositions.clear();
@@ -1029,29 +1026,6 @@ public class BulkScanPanel {
         progressBar.setString("Scanning site map…");
         startScanTimer();
 
-        // Pre-fetch site map on the EDT — on macOS, Burp's internal site-map model is
-        // Swing-backed and calling requestResponses() from a background thread returns an
-        // empty snapshot (silent failure). On Windows/Linux Swing is more permissive off-EDT,
-        // which is why it works there but not on macOS. Pre-fetching here is safe on all OSes.
-        final List<burp.api.montoya.http.message.HttpRequestResponse> siteMapSnapshot;
-        try {
-            siteMapSnapshot = api.siteMap().requestResponses();
-        } catch (Exception fetchErr) {
-            debugLog("scanFromSiteMap: cannot read site map: " + fetchErr);
-            progressBar.setIndeterminate(false);
-            progressBar.setString("");
-            startBtn.setEnabled(true);
-            siteMapBtn.setEnabled(true);
-            statusLabel.setText("Site map unavailable: " + fetchErr);
-            statusLabel.setForeground(Color.RED);
-            stopScanTimer();
-            return;
-        }
-
-        debugLog("[SiteMap] snapshot size=" + siteMapSnapshot.size()
-                + "  watchedHosts=" + (filterByHost ? watchedHosts : "ALL")
-                + "  EDT=" + SwingUtilities.isEventDispatchThread());
-
         paused.set(false);
         running.set(true);
         startBtn.setText("⏸  Pause");
@@ -1059,6 +1033,31 @@ public class BulkScanPanel {
         stopBtn.setEnabled(true);
 
         Thread t = new Thread(() -> {
+            // Retrieve the site-map snapshot on this background thread, never on the EDT.
+            // api.siteMap().requestResponses() is thread-safe; fetching a large site map on the
+            // EDT would freeze the entire Burp UI for the duration of the retrieval.
+            final List<burp.api.montoya.http.message.HttpRequestResponse> siteMapSnapshot;
+            try {
+                siteMapSnapshot = api.siteMap().requestResponses();
+            } catch (Exception fetchErr) {
+                debugLog("scanFromSiteMap: cannot read site map: " + fetchErr);
+                running.set(false);
+                SwingUtilities.invokeLater(() -> {
+                    stopScanTimer();
+                    progressBar.setIndeterminate(false);
+                    progressBar.setString("");
+                    startBtn.setText("▶  Start Scan");
+                    startBtn.setEnabled(true);
+                    stopBtn.setEnabled(false);
+                    siteMapBtn.setEnabled(true);
+                    statusLabel.setText("Site map unavailable: " + fetchErr);
+                    statusLabel.setForeground(Color.RED);
+                });
+                return;
+            }
+            debugLog("[SiteMap] snapshot size=" + siteMapSnapshot.size()
+                    + "  watchedHosts=" + (filterByHost ? watchedHosts : "ALL")
+                    + "  EDT=" + SwingUtilities.isEventDispatchThread());
             try {
                 int scanned = 0;
                 int processed = 0;
@@ -1245,17 +1244,17 @@ public class BulkScanPanel {
     private void sweepSiteMapForHosts(Set<String> watchedHosts) {
         if (watchedHosts.isEmpty()) return;
         try {
-            // Pre-fetch on EDT — Burp's site-map model is Swing-backed; reading it off
-            // the EDT on macOS returns an empty snapshot (same root cause as scanFromSiteMap).
-            // This method runs on a daemon background thread so invokeAndWait is safe (no deadlock).
-            final List<burp.api.montoya.http.message.HttpRequestResponse>[] ref = new List[1];
+            // This method runs on a daemon background thread; api.siteMap().requestResponses()
+            // is thread-safe, so the snapshot is retrieved here directly and never on the EDT
+            // (retrieving a large site map on the EDT would freeze the Burp UI).
+            final List<burp.api.montoya.http.message.HttpRequestResponse> smList;
             try {
-                SwingUtilities.invokeAndWait(() -> ref[0] = api.siteMap().requestResponses());
+                smList = api.siteMap().requestResponses();
             } catch (Exception fetchErr) {
                 debugLog("sweepSiteMapForHosts: cannot fetch site map: " + fetchErr);
                 return;
             }
-            for (burp.api.montoya.http.message.HttpRequestResponse rr : ref[0]) {
+            for (burp.api.montoya.http.message.HttpRequestResponse rr : smList) {
                 // IMPORTANT: do NOT check running.get() here.
                 // The active fetch (network requests) for a single URL completes very quickly
                 // when the target redirects to SSO — onScanComplete sets running=false before
@@ -1389,18 +1388,17 @@ public class BulkScanPanel {
     private void sweepProxyHistoryForHosts(Set<String> watchedHosts) {
         if (watchedHosts.isEmpty()) return;
         try {
-            final List<burp.api.montoya.proxy.ProxyHttpRequestResponse>[] ref = new List[1];
+            // Runs on a daemon background thread; api.proxy().history() is thread-safe and not
+            // Swing-backed, so it is retrieved here directly without ever touching the EDT.
+            final List<burp.api.montoya.proxy.ProxyHttpRequestResponse> phList;
             try {
-                SwingUtilities.invokeAndWait(() -> {
-                    try { ref[0] = api.proxy().history(); }
-                    catch (Exception ignored) { ref[0] = List.of(); }
-                });
+                phList = api.proxy().history();
             } catch (Exception e) {
                 debugLog("sweepProxyHistoryForHosts: cannot fetch history: " + e);
                 return;
             }
             int swept = 0;
-            for (burp.api.montoya.proxy.ProxyHttpRequestResponse prr : ref[0]) {
+            for (burp.api.montoya.proxy.ProxyHttpRequestResponse prr : phList) {
                 if (prr.request() == null || prr.response() == null) continue;
                 int s = prr.response().statusCode();
                 if (s < 200 || s >= 300) continue;
@@ -1480,17 +1478,18 @@ public class BulkScanPanel {
     }
 
     /**
-     * Builds a URL → HttpRequestResponse index from Burp's site map, restricted to
-     * 200-OK HTML responses for the given watched hosts.
+     * Builds a URL → HttpRequestResponse index from Burp's site map, restricted to successful
+     * (2xx) responses whose host matches one of the {@code watchedHosts} being scanned.
      * <p>
      * Called once at the start of each static bulk scan so {@link #processUrl} can
      * look up each target URL in O(1) instead of iterating the full site map per URL.
-     * Only HTML responses are indexed because the goal is to replace the unauthenticated
-     * active-fetch HTML body with the authenticated site map body for HTML scanning and
-     * {@code <script src>} extraction.
+     * Restricting the index to the watched hosts keeps a large Burp project's unrelated
+     * site-map entries (and their full request/response byte arrays) out of memory for the
+     * duration of the scan; assets on other hosts fall back to the target-origin entry.
      */
-    private Map<String, HttpRequestResponse> buildSiteMapIndex() {
+    private Map<String, HttpRequestResponse> buildSiteMapIndex(Set<String> watchedHosts) {
         Map<String, HttpRequestResponse> index = new HashMap<>();
+        if (watchedHosts == null || watchedHosts.isEmpty()) return index;
         try {
             for (HttpRequestResponse rr : api.siteMap().requestResponses()) {
                 if (rr.request() == null || rr.response() == null) continue;
@@ -1498,6 +1497,15 @@ public class BulkScanPanel {
                 if (status < 200 || status >= 300) continue;
                 String url = rr.request().url();
                 if (url == null) continue;
+                // Only pin entries for the hosts actually being scanned.
+                try {
+                    String host = new java.net.URL(url).getHost().toLowerCase();
+                    boolean watched = false;
+                    for (String wh : watchedHosts) {
+                        if (host.equals(wh) || host.endsWith("." + wh)) { watched = true; break; }
+                    }
+                    if (!watched) continue;
+                } catch (Exception ignored) { continue; }
                 // Normalise: strip query/fragment + trailing slash for O(1) lookup
                 String normUrl = url.split("[?#]")[0].replaceAll("/$", "");
                 index.putIfAbsent(normUrl, rr);
@@ -1641,21 +1649,6 @@ public class BulkScanPanel {
                 }
             }
         } catch (Exception ignored) {}
-    }
-
-    /**
-     * Rebuilds HTTP_CLIENT using the current allowInsecureSsl preference.
-     * Must be called after settings are loaded from preferences so that a saved
-     * "Allow insecure SSL = true" preference is honoured at startup.
-     * No-op if the value has not changed since the client was last built.
-     */
-    public void syncHttpClient() {
-        boolean allow = settings.isAllowInsecureSsl();
-        int port = (proxyPortSpinner != null) ? (int) proxyPortSpinner.getValue() : 8080;
-        if (allow == httpClientAllowInsecureSsl) return;
-        httpClientAllowInsecureSsl = allow;
-        HTTP_CLIENT   = buildHttpClient(allow, port);
-        IP_HTTP_CLIENT = buildHttpClient(true, port);
     }
 
     // =========================================================================
@@ -1921,11 +1914,9 @@ public class BulkScanPanel {
         scanAndAppend(htmlBody, htmlCt, baseUrl, htmlRr);
 
         // 3. Headless browse — launch Chrome through Burp proxy so JS executes and all
-        //    dynamic XHR/fetch API calls fire.  SecretProxyHandler captures the traffic
-        //    passively; findings appear in the table automatically via ScopeMonitor.
-        // 4. Headless browse — launch Chrome through Burp proxy so JS executes and all
-        //    dynamic XHR/fetch API calls fire.  SecretProxyHandler captures the traffic
-        //    passively; findings appear in the table automatically via ScopeMonitor.
+        //    dynamic XHR/fetch API calls fire.  The post-headless site-map and proxy-history
+        //    sweeps below pick up the responses (and, in Burp Pro, the passive scan check also
+        //    scans the proxied traffic); findings reach the table via ScopeMonitor / the sweeps.
         // Collect scripts found in site map HTML pages AFTER headless populates it,
         // so multi-hop JS-redirect chains (e.g. IP → nawstart.html → 49 JS files) are captured.
         Set<String> postHeadlessScripts = new LinkedHashSet<>();
@@ -2354,9 +2345,9 @@ public class BulkScanPanel {
      * Launches Chrome/Chromium in headless mode with Burp as the proxy for the
      * given URL, then waits up to 45 seconds for the page to load and JS to run.
      *
-     * All traffic (XHR, Fetch, WebSockets HTTP-upgrade) flows through Burp proxy →
-     * SecretProxyHandler picks it up → ScopeMonitor dispatches findings to the
-     * Bulk Scan panel automatically.
+     * All traffic (XHR, Fetch, WebSockets HTTP-upgrade) flows through Burp proxy; the
+     * post-headless site-map and proxy-history sweeps (and, in Burp Pro, the passive scan
+     * check) pick it up and findings reach the Bulk Scan panel via ScopeMonitor.
      *
      * Returns null — URL discovery is done via post-headless site map sweep.
      */
@@ -2402,7 +2393,7 @@ public class BulkScanPanel {
                     "--disable-gpu",
                     "--no-sandbox",
                     "--remote-debugging-port=0",
-                    // Route all Chrome traffic through Burp proxy so SecretProxyHandler captures
+                    // Route all Chrome traffic through Burp proxy so Burp captures
                     // every response body (including cross-origin POST token endpoints like
                     // api.internal.example.com/auth/token).
                     // Without this, POST response bodies never go through Burp and CDP
@@ -2500,8 +2491,11 @@ public class BulkScanPanel {
      *   2. Connect to the tab's CDP WebSocket and enable Network.enable
      *   3. Navigate to pageUrl via Page.navigate (all network events are captured)
      *   4. Collect every URL from Network.requestWillBeSent for 25 s
-     *   5. Replay each URL through a Burp-proxied Java HttpClient so the traffic
-     *      appears in Burp's proxy history and sitemap
+     *   5. No separate replay is needed: Chrome runs with --proxy-server pointed at Burp, so all
+     *      of its traffic already flows through Burp and is picked up by the post-headless sweeps.
+     *
+     * This uses a plaintext CDP WebSocket to local Chrome (ws://127.0.0.1), the recognised Burp
+     * API limitation for Chrome DevTools Protocol; it performs no TLS and no remote HTTP.
      */
     private void cdpNavigateWithProxy(String browserWsUrl, String pageUrl, int proxyPort) {
         try {
@@ -2861,7 +2855,7 @@ public class BulkScanPanel {
 
             // Step 5 (URL replay via Java HttpClient) removed: with --proxy-server active,
             // Chrome already routes all traffic through Burp during the CDP window above.
-            // Replaying URLs again would cause SecretProxyHandler to fire twice per URL,
+            // Replaying URLs again would cause the same URLs to be scanned twice per URL,
             // doubling scan work and significantly increasing scan time.
 
             } finally {
@@ -2981,12 +2975,6 @@ public class BulkScanPanel {
             String ch = new java.net.URL(candidateUrl).getHost().toLowerCase();
             return registrableDomain(th).equals(registrableDomain(ch));
         } catch (Exception e) { return false; }
-    }
-
-    /** True when the URL's host is a raw IPv4 address (no hostname validation possible). */
-    private static boolean isIpUrl(String url) {
-        try { return new java.net.URL(url).getHost().matches("\\d+\\.\\d+\\.\\d+\\.\\d+"); }
-        catch (Exception e) { return false; }
     }
 
     /** Overload used when no HttpRequestResponse is available (ScopeMonitor listener). */
@@ -3128,7 +3116,7 @@ public class BulkScanPanel {
         // Deduplicate: same rule + value seen via both headless-proxy path and active-fetch path.
         // Strip content-type label suffixes ([JSON], [JS], [HTML], [XML], [REQ-HEADERS]) from
         // sourceUrl before hashing so that the two scan paths (sweepSiteMapForHosts produces
-        // "url [JSON]"; SecretProxyHandler produces "url") collapse to the same key.
+        // "url [JSON]"; the passive/sweep path produces "url") collapse to the same key.
         // Strip content-type label (e.g. " [HTML]", " [JS]") from anywhere in the URL, not just
         // the end.  When inline <script> blocks are scanned the label appears mid-string:
         // "https://example.com/ [HTML]#inline-js" — the old end-anchor ($) failed to strip it,
@@ -3241,99 +3229,14 @@ public class BulkScanPanel {
     }
 
     // =========================================================================
-    // HTTP fetching via Java's native HttpClient
+    // HTTP fetching via Burp's HTTP engine (api.http().sendRequest)
     // =========================================================================
-
-    /**
-     * Shared HTTP client for all bulk-scan fetches.
-     * Trust-all SSL accepts self-signed / internal certs common in enterprise environments.
-     * Redirect.ALWAYS follows cross-host redirects; processUrl() detects SSO redirects by
-     * comparing the final URI host against the original request host.
-     * Using Java's built-in HttpClient instead of api.http().sendRequest() because Burp's
-     * HTTP engine silently returns a null response on Windows for many HTTPS targets.
-     */
-    private java.net.http.HttpClient HTTP_CLIENT;
-    private boolean httpClientAllowInsecureSsl = false; // tracks value used to build HTTP_CLIENT
-    /** Trust-all HTTPS client used automatically for raw-IP targets (SAN-for-IP certs are rare). */
-    private java.net.http.HttpClient IP_HTTP_CLIENT;
-
-    private java.net.http.HttpClient buildHttpClient(boolean allowInsecureSsl, int proxyPort) {
-        // Route through Burp's proxy so traffic appears in Proxy History and passive scanning fires.
-        // This also prevents Windows WinHTTP system-proxy interference that causes fetchUrl to fail
-        // silently on Windows when Burp is not registered as the system proxy (unlike macOS).
-        java.net.ProxySelector proxy = (proxyPort > 0)
-                ? java.net.ProxySelector.of(new java.net.InetSocketAddress("127.0.0.1", proxyPort))
-                : java.net.ProxySelector.getDefault();
-
-        // When routing through an explicit Burp proxy port, always use trust-all SSL.
-        // Burp acts as a TLS MITM and re-signs every certificate with its own CA.
-        // Java's JDK cacerts store does not contain Burp's CA, so strict validation
-        // rejects every HTTPS connection with a PKIX error.  Trust-all is safe here
-        // because Burp has already validated the real server cert on its side.
-        if (!allowInsecureSsl && proxyPort <= 0) {
-            // Strict mode — only when NOT routing through an explicit proxy
-            return java.net.http.HttpClient.newBuilder()
-                    .proxy(proxy)
-                    .followRedirects(java.net.http.HttpClient.Redirect.ALWAYS)
-                    .connectTimeout(java.time.Duration.ofSeconds(20))
-                    .build();
-        }
-        try {
-            // X509ExtendedTrustManager takes over the ENTIRE validation including
-            // the SAN/IP hostname check — bypasses cert chain + IP mismatch errors.
-            javax.net.ssl.TrustManager[] trustAll = {
-                new javax.net.ssl.X509ExtendedTrustManager() {
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                        return new java.security.cert.X509Certificate[0];
-                    }
-                    public void checkClientTrusted(
-                            java.security.cert.X509Certificate[] c, String a) {}
-                    public void checkServerTrusted(
-                            java.security.cert.X509Certificate[] c, String a) {}
-                    public void checkClientTrusted(
-                            java.security.cert.X509Certificate[] c, String a,
-                            java.net.Socket s) {}
-                    public void checkServerTrusted(
-                            java.security.cert.X509Certificate[] c, String a,
-                            java.net.Socket s) {}
-                    public void checkClientTrusted(
-                            java.security.cert.X509Certificate[] c, String a,
-                            javax.net.ssl.SSLEngine e) {}
-                    public void checkServerTrusted(
-                            java.security.cert.X509Certificate[] c, String a,
-                            javax.net.ssl.SSLEngine e) {}
-                }
-            };
-            javax.net.ssl.SSLContext sc = javax.net.ssl.SSLContext.getInstance("TLS");
-            sc.init(null, trustAll, new java.security.SecureRandom());
-            javax.net.ssl.SSLParameters sslParams = new javax.net.ssl.SSLParameters();
-            // null disables endpoint identification (hostname/IP SAN check) in Java's HttpClient.
-            // Empty string "" is theoretically equivalent but has been observed to be ignored in
-            // some Java 17–25 HttpClient builds; null is the safe choice.
-            sslParams.setEndpointIdentificationAlgorithm(null);
-            return java.net.http.HttpClient.newBuilder()
-                    // Force HTTP/1.1: HTTP/2 has stricter TLS requirements (RFC 7540 §9.2) that
-                    // can re-enable hostname verification even when the trust manager accepts everything.
-                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
-                    .proxy(proxy)
-                    .sslContext(sc)
-                    .sslParameters(sslParams)
-                    .followRedirects(java.net.http.HttpClient.Redirect.ALWAYS)
-                    .connectTimeout(java.time.Duration.ofSeconds(20))
-                    .build();
-        } catch (Exception e) {
-            // Log to stderr so the failure is visible in Burp's Extensions > Output even though
-            // this is a static method without access to api.logging().
-            if (api != null)
-                api.logging().logToError("[SecretSifter] WARN: buildHttpClient(allowInsecureSsl=true) failed — " +
-                    "IP HTTPS scanning will use strict cert validation. Cause: " + e);
-            return java.net.http.HttpClient.newBuilder()
-                    .proxy(proxy)
-                    .followRedirects(java.net.http.HttpClient.Redirect.ALWAYS)
-                    .connectTimeout(java.time.Duration.ofSeconds(20))
-                    .build();
-        }
-    }
+    //
+    // All bulk-scan fetches are issued through Burp's own HTTP API rather than a
+    // java.net.http.HttpClient. Burp performs the request, follows redirects, and applies its own
+    // TLS handling. Upstream certificate verification is Burp's responsibility and is left at
+    // Burp's default (which accepts the self-signed / internal certificates common in enterprise
+    // testing), so the extension contains no HTTP client and no certificate-trust code of its own.
 
     private record FetchResult(String body, String contentType,
                                String finalUrl, HttpRequestResponse requestResponse,
@@ -3341,61 +3244,53 @@ public class BulkScanPanel {
 
     private FetchResult fetchUrl(String url) {
         try {
-            // Java's native HttpClient — reliably handles HTTPS on all platforms including
-            // Windows where api.http().sendRequest() silently returns a null response for
-            // many HTTPS targets.  Redirect.ALWAYS follows cross-host redirects; the final
-            // URI is available via resp.uri() so processUrl() can detect SSO redirects.
-            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create(url))
-                    .header("User-Agent",
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            + "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            + "Chrome/124.0.0.0 Safari/537.36")
-                    .header("Accept",
-                            "text/html,application/xhtml+xml,application/xml;"
-                            + "q=0.9,image/avif,image/webp,*/*;q=0.8")
-                    .header("Accept-Language", "en-US,en;q=0.9")
-                    // Only gzip+deflate — brotli (br) omitted: no Java stdlib decoder.
-                    // decompressBytes() handles gzip and deflate manually.
-                    .header("Accept-Encoding", "gzip, deflate")
-                    // "Connection" and "Upgrade-Insecure-Requests" are restricted headers in
-                    // Java's HttpClient and will throw IllegalArgumentException if set manually.
-                    // HttpClient manages connection keep-alive automatically.
-                    .header("Cache-Control", "max-age=0")
-                    .timeout(java.time.Duration.ofSeconds(20))
-                    .GET()
-                    .build();
-            // Raw-IP URLs never have valid SAN certs — use the trust-all client automatically.
-            java.net.http.HttpClient clientToUse = isIpUrl(url) ? IP_HTTP_CLIENT : HTTP_CLIENT;
-            java.net.http.HttpResponse<byte[]> resp =
-                    clientToUse.send(req, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            // Issue the GET through Burp's own HTTP engine. Burp handles TLS (including self-signed
+            // / internal certs, per its default upstream-TLS behaviour) and follows redirects, so no
+            // HTTP client or certificate-trust code lives in the extension. The returned request's
+            // url() reflects the final URL after redirects, which processUrl() uses for SSO detection.
+            burp.api.montoya.http.message.requests.HttpRequest req =
+                    burp.api.montoya.http.message.requests.HttpRequest.httpRequestFromUrl(url)
+                        .withHeader("User-Agent",
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                + "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                + "Chrome/124.0.0.0 Safari/537.36")
+                        .withHeader("Accept",
+                                "text/html,application/xhtml+xml,application/xml;"
+                                + "q=0.9,image/avif,image/webp,*/*;q=0.8")
+                        .withHeader("Accept-Language", "en-US,en;q=0.9")
+                        // Only gzip+deflate — brotli (br) omitted: no Java stdlib decoder.
+                        // decompressBytes() normalises the body below if Burp returns it encoded.
+                        .withHeader("Accept-Encoding", "gzip, deflate")
+                        .withHeader("Cache-Control", "max-age=0");
 
-            String finalUrl = resp.uri().toString();
-            int    status   = resp.statusCode();
+            burp.api.montoya.http.RequestOptions opts =
+                    burp.api.montoya.http.RequestOptions.requestOptions()
+                        .withRedirectionMode(burp.api.montoya.http.RedirectionMode.ALWAYS)
+                        .withResponseTimeout(20_000);
+
+            burp.api.montoya.http.message.HttpRequestResponse rr = api.http().sendRequest(req, opts);
+            burp.api.montoya.http.message.responses.HttpResponse resp = (rr != null) ? rr.response() : null;
+            if (resp == null) {
+                debugLog("[fetchUrl] no response from Burp HTTP engine (unreachable/timeout): " + url);
+                return null;
+            }
+
+            // Final URL after redirects — the returned request is the last one Burp sent.
+            String finalUrl = (rr.request() != null && rr.request().url() != null)
+                    ? rr.request().url() : url;
+            int status = resp.statusCode();
             // 4xx/5xx: return a result with null body so callers get the status code
             // (used by processUrl() to distinguish auth errors from connection failures)
             if (status >= 400) {
                 return new FetchResult(null, null, finalUrl, null, status);
             }
-            String contentType     = resp.headers().firstValue("Content-Type").orElse(null);
-            String contentEncoding = resp.headers().firstValue("Content-Encoding").orElse(null);
-            String body            = decompressBytes(resp.body(), contentEncoding, finalUrl);
+            String contentType     = resp.headerValue("Content-Type");
+            String contentEncoding = resp.headerValue("Content-Encoding");
+            byte[] raw             = resp.body() != null ? resp.body().getBytes() : new byte[0];
+            String body            = decompressBytes(raw, contentEncoding, finalUrl);
             return new FetchResult(body, contentType, finalUrl, null, status);
         } catch (Exception e) {
-            // Unwrap cause chain — UnknownHostException / ConnectException means the target
-            // is unreachable; log at INFO level and skip quietly.
-            Throwable cause = e;
-            while (cause != null) {
-                if (cause instanceof java.net.UnknownHostException
-                        || cause instanceof java.net.ConnectException) {
-                    debugLog("[fetchUrl] Unreachable: " + url
-                            + " — " + cause.getClass().getSimpleName() + ": " + cause.toString());
-                    return null;
-                }
-                cause = cause.getCause();
-            }
-            // For SSL errors, timeouts, or protocol errors: log the full exception chain
-            // so the root cause is visible in Extensions → Output.
+            // Log the full exception chain so the root cause is visible in Extensions → Output.
             StringBuilder sb = new StringBuilder("[fetchUrl] ERROR for ").append(url).append(" — ");
             Throwable t = e;
             while (t != null) {
@@ -3412,7 +3307,7 @@ public class BulkScanPanel {
      * Decompresses a raw response body byte array using the given Content-Encoding value.
      * Handles gzip and deflate; returns a UTF-8 string for unknown or absent encodings.
      *
-     * @param raw  raw response body bytes from Java's HttpClient
+     * @param raw  raw response body bytes from Burp's HTTP response
      * @param enc  value of the Content-Encoding response header (may be null)
      * @param url  URL string used only for diagnostic log messages
      * @return decompressed body as UTF-8 text

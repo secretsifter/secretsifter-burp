@@ -80,17 +80,20 @@ public class SecretContextMenu implements ContextMenuItemsProvider {
         //    only the root-path response (or a structural node with no response). Expanding
         //    to the full site map ensures every JS/HTML/JSON/XML file already captured by
         //    Burp for that domain is scanned — not just the single item Burp happened to select.
-        //    Site-map snapshot must be fetched on the EDT — on macOS Burp's internal model is
-        //    Swing-backed and requestResponses() returns an empty list from a background thread.
+        //    This whole method runs on the background rescan executor; api.siteMap()
+        //    .requestResponses() is thread-safe, so the (potentially large) snapshot is fetched
+        //    here directly and never on the Event Dispatch Thread, which would freeze the Burp UI.
         List<HttpRequestResponse> toScan = new ArrayList<>();
         if (!watchedHosts.isEmpty()) {
-            @SuppressWarnings("unchecked")
-            java.util.List<HttpRequestResponse>[] smRef = new java.util.List[]{java.util.List.of()};
+            List<HttpRequestResponse> siteMapSnapshot;
             try {
-                javax.swing.SwingUtilities.invokeAndWait(() -> smRef[0] = api.siteMap().requestResponses());
-            } catch (Exception ignored) {}
+                siteMapSnapshot = api.siteMap().requestResponses();
+            } catch (Exception e) {
+                siteMapSnapshot = java.util.List.of();
+                if (api != null) api.logging().logToError("SecretContextMenu: site-map retrieval failed: " + e);
+            }
             try {
-                for (HttpRequestResponse sm : smRef[0]) {
+                for (HttpRequestResponse sm : siteMapSnapshot) {
                     if (sm.request() == null || sm.response() == null) continue;
                     String itemUrl = sm.request().url();
                     if (itemUrl == null || itemUrl.isBlank()) continue;

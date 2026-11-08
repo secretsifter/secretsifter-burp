@@ -2,6 +2,7 @@ package com.secretscanner;
 
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.responses.HttpResponse;
+import burp.api.montoya.logging.Logging;
 import burp.api.montoya.ui.Selection;
 import burp.api.montoya.ui.editor.extension.EditorCreationContext;
 import burp.api.montoya.ui.editor.extension.ExtensionProvidedHttpResponseEditor;
@@ -40,15 +41,17 @@ import java.util.List;
 public class SecretSifterTab implements HttpResponseEditorProvider {
 
     private final SecretScanner scanner;
+    private final Logging       logging;
 
-    public SecretSifterTab(SecretScanner scanner) {
+    public SecretSifterTab(SecretScanner scanner, Logging logging) {
         this.scanner = scanner;
+        this.logging = logging;
     }
 
     @Override
     public ExtensionProvidedHttpResponseEditor provideHttpResponseEditor(
             EditorCreationContext creationContext) {
-        return new FindingsEditor(scanner);
+        return new FindingsEditor(scanner, logging);
     }
 
     // -------------------------------------------------------------------------
@@ -56,6 +59,7 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
     private static class FindingsEditor implements ExtensionProvidedHttpResponseEditor {
 
         private final SecretScanner scanner;
+        private final Logging       logging;
         private final JPanel        panel;
         private final FindingsModel model;
         private final JTable        table;
@@ -65,8 +69,9 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
         private String       lastHash     = "";
         private HttpResponse lastResponse = null;
 
-        FindingsEditor(SecretScanner scanner) {
+        FindingsEditor(SecretScanner scanner, Logging logging) {
             this.scanner = scanner;
+            this.logging = logging;
 
             model = new FindingsModel();
             table = new JTable(model);
@@ -289,6 +294,8 @@ public class SecretSifterTab implements HttpResponseEditorProvider {
                     findings = scanner.scanText(body, ct, url);
                 } catch (Exception ex) {
                     findings = List.of();
+                    if (logging != null)
+                        logging.logToError("SecretSifter tab: scan failed for " + url + ": " + ex);
                 }
                 final List<SecretFinding> result = findings;
                 SwingUtilities.invokeLater(() -> {
